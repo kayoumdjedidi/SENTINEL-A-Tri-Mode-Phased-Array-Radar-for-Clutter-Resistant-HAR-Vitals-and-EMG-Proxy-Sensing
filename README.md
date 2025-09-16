@@ -17,12 +17,12 @@ The system integrates adaptive nulling, virtual arrays, and lightweight on-edge 
 - Fusion of HAR, vitals, and EMG-proxy into trend-based risk alerts  
 
 ## Planed Repository Structure
-├── docs/             # Documentation & reports
-├── data/             # Sample datasets (HAR, vitals, EMG proxy)
-├── scripts/          # Python/MATLAB processing scripts
-├── models/           # Tiny Mamba/SSM inference code
-├── hardware/         # CN0566 configs, FPGA pipeline (HamGeek E310)
-└── README.md         # This file
+docs/        Documentation
+data/        Example datasets
+scripts/     Python/MATLAB processing
+models/      Tiny Mamba/SSM code
+hardware/    CN0566 configs, FPGA extensions
+
 
 
 ## Team
