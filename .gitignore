@@ -1,0 +1,115 @@
+############################################################
+# GENERAL RULES (OS + EDITORS)
+############################################################
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+############################################################
+# PYTHON
+############################################################
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+env*/
+pip-wheel-metadata/
+
+# Python packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+############################################################
+# PROJECT DATA (IMPORTANT)
+# Prevents MASSIVE repo size
+############################################################
+
+# Datasets (HUGE — NEVER commit)
+datasets/
+data/
+raw_data/
+recordings/
+signals/
+outputs/
+experiments/
+
+# Typical large files
+*.npy
+*.npz
+*.mat
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+*.joblib
+*.pickle
+*.pkl
+
+# Model exports
+*.onnx
+*.tflite
+*.engine
+*.mlmodel
+*.pb
+
+# Temp files from scipy/sklearn/etc.
+*.cache/
+.cache/
+
+############################################################
+# LOGS & EXPERIMENT OUTPUTS
+############################################################
+
+logs/
+log/
+runs/
+wandb/
+tensorboard/
+tb_logs/
+
+*.log
+*.csv
+*.tsv
+*.png
+*.jpg
+*.jpeg
+
+############################################################
+# SHELL + UTILITY
+############################################################
+
+*.sh~
+*.tmp
+*.bak
+
+############################################################
+# NODE / JS (IF USED)
+############################################################
+
+node_modules/
+npm-debug.log*
+yarn-e
