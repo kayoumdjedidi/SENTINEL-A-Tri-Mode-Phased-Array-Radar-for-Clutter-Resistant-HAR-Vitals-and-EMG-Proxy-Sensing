@@ -63,6 +63,8 @@ def main(proj: Project):
     ###########################################################################################################
     # Build Logger
     proj.build_logger(model_id=classifier_model_id)
+    # Init WandB (if available / configured)
+    proj.init_wandb(run_name=classifier_model_id)
 
     # Select Loss function
     criterion = proj.build_criterion()
@@ -81,3 +83,4 @@ def main(proj: Project):
                val_loader=test_loader,
                test_loader=test_loader,
                best_model_metric='NMSE')
+    proj.finish_wandb()
