@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AIRHAR (RadMamba)
 **AIRHAR** is a learning framework built in PyTorch for radar-based human activity recognition. Developed by the [Lab of Efficient Machine Intelligence](https://www.tudemi.com) @ Delft University of Technology, AIRHAR aims to bridge the gap between machine learning and signal processing of radar system.
 
@@ -117,3 +118,42 @@ This work was partially supported by the European Research Executive Agency (REA
 - **Chang Gao** - Project Lead
 - **Yizhuo Wu** - Core Developer
 
+=======
+# SENTINEL: A Tri-Mode Phased-Array Radar for HAR, Vitals, and EMG-Proxy Sensing
+
+This repository contains code, datasets, and documentation for the IEEE Radar Challenge 2026 project **SENTINEL**.
+
+## Project Overview
+SENTINEL implements a tri-mode X-band phased-array radar system on the ADI CN0566 platform:
+- FMCW beamforming for tracking, AoA, posture, and fall detection  
+- CW micro-Doppler for respiration and heartbeat monitoring  
+- EMG-proxy sensing (muscle micro-motions, hydration trends)  
+
+The system integrates adaptive nulling, virtual arrays, and lightweight on-edge inference to operate robustly in cluttered environments.
+
+## Features
+- Tri-mode scheduler (FMCW + CW interleaved)  
+- Adaptive beamforming (MVDR/Capon, virtual arrays)  
+- Tiny Mamba/SSM models (<1 MB, <50 ms latency on Raspberry Pi 5)  
+- Fusion of HAR, vitals, and EMG-proxy into trend-based risk alerts  
+
+## Planed Repository Structure
+docs/        Documentation
+data/        Example datasets
+scripts/     Python/MATLAB processing
+models/      Tiny Mamba/SSM code
+hardware/    CN0566 configs, FPGA extensions
+
+
+
+## Team
+- Kayoum Djedidi – PhD Student, INRS Montréal  
+- Olivier Tomé – PhD Student, INRS Montréal  
+**Mentor:** Prof. Tarek Djerafi, INRS Montréal  
+
+## Timeline
+- Nov 2025: Setup and baseline tutorial  
+- Jan 2026: Range validation experiments  
+- Feb–Apr 2026: Pipeline integration and ablations  
+- May 2026: Final demo at IEEE Radar 2026, Phoenix, AZ  
+>>>>>>> ce3db9f92529394b09f285cc0b36714e2f9531d3
