@@ -1,0 +1,26 @@
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_setup.py:_flush():80] Current SDK version is 0.23.1
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_setup.py:_flush():80] Configure stats pid to 16049
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_setup.py:_flush():80] Loading settings from /home/kayoum/.config/wandb/settings
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_setup.py:_flush():80] Loading settings from /home/kayoum/projects/AIRHAR/wandb/settings
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_init.py:setup_run_log_directory():714] Logging user logs to /home/kayoum/projects/AIRHAR/wandb/run-20251204_231136-fazp6gf7/logs/debug.log
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_init.py:setup_run_log_directory():715] Logging internal logs to /home/kayoum/projects/AIRHAR/wandb/run-20251204_231136-fazp6gf7/logs/debug-internal.log
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_init.py:init():841] calling init triggers
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_init.py:init():846] wandb.init called with sweep_config: {}
+config: {'dataset_name': 'DIAT', 'num_classes': 6, 'channels': 3, 'image_height': 224, 'frame_length': 224, 'stride': 1, 'continuous': False, 'log_precision': 8, 'step': 'classify', 'eval_val': 1, 'eval_test': 1, 'accelerator': 'cuda', 'devices': 0, 're_level': 'soft', 'seed': 0, 'loss_type': 'WeightedCrossEntropy', 'opt_type': 'adamw', 'batch_size': 16, 'batch_size_eval': 16, 'n_epochs': 50, 'lr_schedule': 1, 'lr': 0.0001, 'lr_end': 1e-06, 'decay_factor': 0.5, 'patience': 15, 'grad_clip_val': 200, 'Classification_backbone': 'radmamba', 'Classification_hidden_size': 80, 'Classification_num_layers': 1, 'channel_confusion_layer': 2, 'channel_confusion_out_channels': 16, 'time_downsample_factor': 1, 'optional_avg_pool': False, 'dim': 80, 'dt_rank': 2, 'd_state': 1, 'dropout': 0, 'device': device(type='cuda', index=0), '_wandb': {}}
+2025-12-04 23:11:36,844 INFO    MainThread:16049 [wandb_init.py:init():889] starting backend
+2025-12-04 23:11:37,069 INFO    MainThread:16049 [wandb_init.py:init():892] sending inform_init request
+2025-12-04 23:11:37,073 INFO    MainThread:16049 [wandb_init.py:init():900] backend started and connected
+2025-12-04 23:11:37,076 INFO    MainThread:16049 [wandb_init.py:init():970] updated telemetry
+2025-12-04 23:11:37,082 INFO    MainThread:16049 [wandb_init.py:init():994] communicating run to backend with 90.0 second timeout
+2025-12-04 23:11:38,024 INFO    MainThread:16049 [wandb_init.py:init():1041] starting run threads in backend
+2025-12-04 23:11:38,092 INFO    MainThread:16049 [wandb_run.py:_console_start():2521] atexit reg
+2025-12-04 23:11:38,092 INFO    MainThread:16049 [wandb_run.py:_redirect():2369] redirect: wrap_raw
+2025-12-04 23:11:38,092 INFO    MainThread:16049 [wandb_run.py:_redirect():2438] Wrapping output streams.
+2025-12-04 23:11:38,092 INFO    MainThread:16049 [wandb_run.py:_redirect():2461] Redirects installed.
+2025-12-04 23:11:38,098 INFO    MainThread:16049 [wandb_init.py:init():1081] run started, returning control to user process
+2025-12-04 23:28:37,156 INFO    MainThread:16049 [wandb_run.py:_finish():2287] finishing run kayoum-inrs/airhar/fazp6gf7
+2025-12-04 23:28:37,158 INFO    MainThread:16049 [wandb_run.py:_atexit_cleanup():2486] got exitcode: 0
+2025-12-04 23:28:37,158 INFO    MainThread:16049 [wandb_run.py:_restore():2468] restore
+2025-12-04 23:28:37,158 INFO    MainThread:16049 [wandb_run.py:_restore():2474] restore done
+2025-12-04 23:28:37,907 INFO    MainThread:16049 [wandb_run.py:_footer_sync_info():3862] logging synced files
