@@ -84,13 +84,19 @@ experiments/
 # LOGS & EXPERIMENT OUTPUTS
 ############################################################
 
-logs/
-log/
 runs/
-wandb/
+# Allow project logs and W&B artifacts to be tracked
+!log/
+!log/**
+!wandb/
+!wandb/**
+!save/
+!save/**
+
 tensorboard/
 tb_logs/
 
+# Keep generic ignores, but allow tracked log/save/wandb files
 *.log
 *.csv
 *.tsv
