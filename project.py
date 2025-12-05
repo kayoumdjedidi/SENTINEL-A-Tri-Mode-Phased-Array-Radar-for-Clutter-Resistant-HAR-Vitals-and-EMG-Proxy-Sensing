@@ -15,10 +15,18 @@ from torch import optim
 from torch.utils.data import DataLoader
 from arguments import get_arguments
 from modules.paths import create_folder, gen_log_stat, gen_dir_paths, gen_file_paths
-from modules.train_funcs import net_train, net_eval,calculate_metrics
+from modules.train_funcs import net_train, net_eval, calculate_metrics
 from modules.loggers import PandasLogger
 from sklearn import metrics
 import pandas as pd
+
+# Optional Weights & Biases logging
+try:
+    import wandb  # type: ignore
+    _HAS_WANDB = True
+except Exception:
+    wandb = None
+    _HAS_WANDB = False
 
 
 class Project:
@@ -40,6 +48,9 @@ class Project:
 
         # Load Specifications
         self.load_spec()
+
+        # WandB handle
+        self.wandb_run = None
 
         # Hardware Info
         self.num_cpu_threads = os.cpu_count()
@@ -89,6 +100,26 @@ class Project:
                                    path_log_file_best=self.path_log_file_best,
                                    path_log_file_hist=self.path_log_file_hist,
                                    precision=self.log_precision)
+
+    def init_wandb(self, run_name: str):
+        if not _HAS_WANDB:
+            return
+        project_name = os.getenv("WANDB_PROJECT", "airhar")
+        self.wandb_run = wandb.init(
+            project=project_name,
+            name=run_name,
+            config=self.hparams,
+            reinit=True,
+        )
+
+    def log_wandb(self, metrics: dict):
+        if self.wandb_run:
+            wandb.log(metrics)
+
+    def finish_wandb(self):
+        if self.wandb_run:
+            wandb.finish()
+            self.wandb_run = None
 
     def reproducible(self):
         rnd.seed(self.seed)
@@ -247,7 +278,6 @@ class Project:
                                                             mode='min',
                                                             factor=self.decay_factor,
                                                             patience=self.patience,
-                                                            verbose=True,
                                                             threshold=1e-4,
                                                             min_lr=self.lr_end)
         return optimizer, lr_scheduler
@@ -331,5 +361,20 @@ class Project:
             lr_scheduler_criteria = self.log_test[best_model_metric]
             if self.lr_schedule:
                 lr_scheduler.step(lr_scheduler_criteria)
+
+            # WandB logging per epoch
+            if _HAS_WANDB:
+                # grab current lr
+                lr_curr = optimizer.param_groups[0]["lr"] if optimizer.param_groups else 0.0
+                wb_metrics = {
+                    "epoch": epoch,
+                    "train_loss": self.log_train.get("loss"),
+                    "val_loss": self.log_val.get("loss"),
+                    "val_accuracy": self.log_val.get("accuracy"),
+                    "test_loss": self.log_test.get("loss"),
+                    "test_accuracy": self.log_test.get("accuracy"),
+                    "lr": lr_curr,
+                }
+                self.log_wandb(wb_metrics)
         print("Training Completed...")
         print(" ")
