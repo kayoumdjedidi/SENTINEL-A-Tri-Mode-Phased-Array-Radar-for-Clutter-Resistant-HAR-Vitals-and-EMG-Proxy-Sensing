@@ -19,3 +19,8 @@ config: {'dataset_name': 'DIAT', 'num_classes': 6, 'channels': 3, 'image_height'
 2025-12-04 23:31:31,346 INFO    MainThread:100789 [wandb_run.py:_redirect():2438] Wrapping output streams.
 2025-12-04 23:31:31,346 INFO    MainThread:100789 [wandb_run.py:_redirect():2461] Redirects installed.
 2025-12-04 23:31:31,352 INFO    MainThread:100789 [wandb_init.py:init():1081] run started, returning control to user process
+2025-12-04 23:50:12,208 INFO    MainThread:100789 [wandb_run.py:_finish():2287] finishing run kayoum-inrs/airhar/eq8g3o3f
+2025-12-04 23:50:12,209 INFO    MainThread:100789 [wandb_run.py:_atexit_cleanup():2486] got exitcode: 0
+2025-12-04 23:50:12,209 INFO    MainThread:100789 [wandb_run.py:_restore():2468] restore
+2025-12-04 23:50:12,210 INFO    MainThread:100789 [wandb_run.py:_restore():2474] restore done
+2025-12-04 23:50:13,079 INFO    MainThread:100789 [wandb_run.py:_footer_sync_info():3862] logging synced files

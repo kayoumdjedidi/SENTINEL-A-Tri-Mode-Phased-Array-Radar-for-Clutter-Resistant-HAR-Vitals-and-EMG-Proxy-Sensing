@@ -1,0 +1,140 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            frydf1fky6lq7ri5e2h79caqxeiaxqr8:
+                args:
+                    - --dataset_name
+                    - DIAT
+                    - --seed
+                    - "0"
+                    - --Classification_hidden_size
+                    - "16"
+                    - --Classification_backbone
+                    - radmamba
+                    - --dim
+                    - "16"
+                codePath: main.py
+                codePathLocal: main.py
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "1081101176832"
+                        used: "45998297088"
+                email: djedidikayoum@gmail.com
+                executable: /home/kayoum/miniconda3/envs/AIRHAR/bin/python
+                git:
+                    commit: 52e35688fb84aea401d148581cde659d6d89b108
+                    remote: https://github.com/kayoumdjedidi/SENTINEL-A-Tri-Mode-Phased-Array-Radar-for-Clutter-Resistant-HAR-Vitals-and-EMG-Proxy-Sensing.git
+                gpu: NVIDIA GeForce RTX 4060 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      memoryTotal: "8585740288"
+                      name: NVIDIA GeForce RTX 4060 Laptop GPU
+                      uuid: GPU-3629ec0a-ec0f-b652-91d6-a4a9848e5888
+                host: kayoum
+                memory:
+                    total: "16343437312"
+                os: Linux-5.15.133.1-microsoft-standard-WSL2-x86_64-with-glibc2.35
+                program: /home/kayoum/projects/AIRHAR/main.py
+                python: CPython 3.11.14
+                root: /home/kayoum/projects/AIRHAR
+                startedAt: "2025-12-05T04:50:25.256296Z"
+                writerId: frydf1fky6lq7ri5e2h79caqxeiaxqr8
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 5
+            "2":
+                - 1
+                - 5
+            "3":
+                - 13
+                - 16
+            "4": 3.11.14
+            "5": 0.23.1
+            "10":
+                - 20
+            "12": 0.23.1
+            "13": linux-x86_64
+Classification_backbone:
+    value: radmamba
+Classification_hidden_size:
+    value: 16
+Classification_num_layers:
+    value: 1
+accelerator:
+    value: cuda
+batch_size:
+    value: 16
+batch_size_eval:
+    value: 16
+channel_confusion_layer:
+    value: 2
+channel_confusion_out_channels:
+    value: 16
+channels:
+    value: 3
+continuous:
+    value: false
+d_state:
+    value: 1
+dataset_name:
+    value: DIAT
+decay_factor:
+    value: 0.5
+device:
+    value: cuda:0
+devices:
+    value: 0
+dim:
+    value: 16
+dropout:
+    value: 0
+dt_rank:
+    value: 2
+eval_test:
+    value: 1
+eval_val:
+    value: 1
+frame_length:
+    value: 224
+grad_clip_val:
+    value: 200
+image_height:
+    value: 224
+log_precision:
+    value: 8
+loss_type:
+    value: WeightedCrossEntropy
+lr:
+    value: 0.0001
+lr_end:
+    value: 1e-06
+lr_schedule:
+    value: 1
+n_epochs:
+    value: 50
+num_classes:
+    value: 6
+opt_type:
+    value: adamw
+optional_avg_pool:
+    value: false
+patience:
+    value: 15
+re_level:
+    value: soft
+seed:
+    value: 0
+step:
+    value: classify
+stride:
+    value: 1
+time_downsample_factor:
+    value: 1

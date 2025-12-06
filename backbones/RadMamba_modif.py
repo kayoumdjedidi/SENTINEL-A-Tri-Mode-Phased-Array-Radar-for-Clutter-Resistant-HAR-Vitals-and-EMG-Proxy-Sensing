@@ -14,6 +14,21 @@ import pandas as pd
 import os
 from scipy import signal
 
+# Lightweight DropPath (stochastic depth) implementation
+class DropPath(nn.Module):
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, device=x.device, dtype=x.dtype)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
 def posemb_sincos_2d(h, w, dim, temperature: int = 10000, dtype = torch.float32):
     y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing="ij")
     assert (dim % 4) == 0, "feature dimension must be multiple of 4 for sincos emb"
@@ -76,12 +91,14 @@ class VisionEncoderMambaBlock(nn.Module):
         dt_rank: int,
         dim_inner: int,
         d_state: int,
+        drop_path: float = 0.0,
     ):
         super().__init__()
         self.dim = dim
         self.dt_rank = dt_rank
         self.dim_inner = dim_inner
         self.d_state = d_state
+        self.drop_path = DropPath(drop_path)
         
         
         self.forward_conv1d = nn.Conv1d(
@@ -159,7 +176,8 @@ class VisionEncoderMambaBlock(nn.Module):
         out = self.proj3(x3)
         out = rearrange(out, "b d s -> b s d")
                 
-        # Residual connection
+        # Residual connection with optional drop path
+        out = self.drop_path(out)
         return out + skip
 
     def process_direction(
@@ -253,6 +271,11 @@ class RadMamba(nn.Module):
         channel_confusion_out_channels: int = 3,
         time_downsample_factor: int = 4,
         optional_avg_pool: bool = False,
+        learned_pos: bool = True,
+        head_hidden: int = None,
+        use_stem: bool = True,
+        stem_kernel: int = 3,
+        drop_path_rate: float = 0.1,
         *args,
         **kwargs,
     ):
@@ -271,7 +294,16 @@ class RadMamba(nn.Module):
         self.cd_layer = channel_confusion_layer
         self.td_factor = time_downsample_factor
         self.optional_avg_pool = optional_avg_pool
+        self.learned_pos = learned_pos
+        self.head_hidden = head_hidden
         self.batch_norm = nn.BatchNorm2d(channels)
+        self.stem = nn.Identity()
+        if use_stem:
+            self.stem = nn.Sequential(
+                nn.Conv2d(channels, channels, kernel_size=stem_kernel, padding=stem_kernel // 2),
+                nn.BatchNorm2d(channels),
+                nn.SiLU(),
+            )
         if channel_confusion_layer == 2:
             self.CNN = nn.Sequential(nn.Conv2d(channels, self.cd_out_channels, kernel_size=3, padding=1),
                                      nn.BatchNorm2d(self.cd_out_channels),
@@ -310,14 +342,19 @@ class RadMamba(nn.Module):
             nn.LayerNorm(dim)
         )
 
-        self.pos_embedding = posemb_sincos_2d(
+        pe = posemb_sincos_2d(
             h = image_height // patch_height,
             w = image_width // patch_width,
             dim = dim,
-        )
+        ).unsqueeze(0)  # (1, seq, dim)
+        if learned_pos:
+            self.pos_embedding = nn.Parameter(pe)
+        else:
+            self.register_buffer("pos_embedding", pe, persistent=False)
 
         # Dropout
         self.dropout = nn.Dropout(dropout)
+        self.patch_dropout = nn.Dropout(dropout)
 
         # class token
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
@@ -327,22 +364,34 @@ class RadMamba(nn.Module):
 
         # encoder layers
         self.layers = nn.ModuleList()
+        dpr = torch.linspace(0, drop_path_rate, steps=depth).tolist()
 
         # Append the encoder layers with threshold
-        for _ in range(depth):
+        for i in range(depth):
             self.layers.append(
                 VisionEncoderMambaBlock(
                     dim=dim,
                     dt_rank=dt_rank,
                     dim_inner=dim_inner,
                     d_state=d_state,
+                    drop_path=dpr[i],
                     *args,
                     **kwargs,
                 )
             )
 
         # Output head
-        self.output_head = output_head(dim, num_classes)
+        if head_hidden is not None and head_hidden > 0:
+            self.output_head = nn.Sequential(
+                Reduce("b s d -> b d", "mean"),
+                nn.LayerNorm(dim),
+                nn.Linear(dim, head_hidden),
+                nn.SiLU(),
+                nn.Dropout(dropout),
+                nn.Linear(head_hidden, num_classes),
+            )
+        else:
+            self.output_head = output_head(dim, num_classes)
 
 
 
@@ -350,10 +399,12 @@ class RadMamba(nn.Module):
         # If input lacks channel dim (e.g., B,H,W), add one; otherwise leave as-is
         if self.channels == 1 and x.dim() == 3:
             x = x.unsqueeze(1)
+        x = self.stem(x)
         x = self.batch_norm(x)
         x = self.CNN(x)
         x = self.to_patch_embedding(x)
-        x += self.pos_embedding.to(x.device, dtype=x.dtype)
+        x = self.patch_dropout(x)
+        x = x + self.pos_embedding.to(x.device, dtype=x.dtype)
         x = self.dropout(x)
         # Forward pass through layers
         for layer in self.layers:
@@ -361,4 +412,3 @@ class RadMamba(nn.Module):
         x = self.to_latent(x)
         x = self.output_head(x)
         return x
-
