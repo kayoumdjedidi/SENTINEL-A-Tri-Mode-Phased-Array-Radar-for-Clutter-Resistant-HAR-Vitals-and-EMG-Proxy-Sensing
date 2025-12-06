@@ -71,6 +71,29 @@ class CoreModel(nn.Module):
                 time_downsample_factor=time_downsample_factor,
                 optional_avg_pool=optional_avg_pool
             )
+        elif backbone_type == 'radmamba_modif':
+            from backbones.RadMamba_modif import RadMamba as RadMambaMod
+            self.backbone = RadMambaMod(
+                dim=dim,
+                dt_rank=dt_rank,
+                dim_inner=dim,
+                d_state=d_state,
+                num_classes=num_classes,
+                image_height=image_height,
+                image_width=image_width,
+                channels=channels,
+                dropout=dropout,
+                depth=1,
+                channel_confusion_layer=channel_confusion_layer,
+                channel_confusion_out_channels=channel_confusion_out_channels,
+                time_downsample_factor=time_downsample_factor,
+                optional_avg_pool=optional_avg_pool,
+                learned_pos=True,
+                head_hidden=dim // 2,
+                use_stem=True,
+                stem_kernel=3,
+                drop_path_rate=0.1,
+            )
 
         else:
             raise ValueError(f"The backbone type '{self.backbone_type}' is not supported. Please add your own "
