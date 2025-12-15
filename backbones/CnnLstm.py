@@ -53,7 +53,8 @@ class CNNLSTM(nn.Module):
     def forward(self, x):
         h_0 = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
         c_0 = torch.zeros(1, x.size(0), self.hidden_size).to(x.device)
-        if self.channels == 1:
+        # Inputs already include channel dim; only unsqueeze if missing
+        if x.dim() == 3:
             x = x.unsqueeze(1)
         x = rearrange(x, 'b c h w -> b (c h) w')
         x = self.CNN(x)
@@ -61,4 +62,3 @@ class CNNLSTM(nn.Module):
         x, _ = self.LSTM(x, (h_0, c_0))
         x = self.out(x)
         return x
-
