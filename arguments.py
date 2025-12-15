@@ -45,7 +45,8 @@ def get_arguments():
 
     # Classification Model Settings
     parser.add_argument('--Classification_backbone', default='radmamba',
-                        choices=['vgg','resnet','bilstm', 'cnnlstm', 'cnngru', 'radmamba', 'radmamba_modif'], help='DPD model Recurrent layer type')
+                        choices=['vgg','resnet','bilstm', 'cnnlstm', 'cnngru', 'radmamba', 'radmamba_modif', 'radmamba_modif_1', 'conv_mamba_pyr'], help='DPD model Recurrent layer type')
+    parser.add_argument('--exp_name', default='', type=str, help='Optional experiment name override (used in wandb run name)')
     parser.add_argument('--Classification_hidden_size', default=64, type=int, help='Hidden size of DPD backbone.')
     parser.add_argument('--Classification_num_layers', default=1, type=int, help='Number of layers of the DPD backbone.')
 

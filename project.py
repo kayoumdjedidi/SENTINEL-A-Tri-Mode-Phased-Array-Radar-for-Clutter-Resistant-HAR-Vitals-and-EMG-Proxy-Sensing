@@ -51,6 +51,7 @@ class Project:
 
         # WandB handle
         self.wandb_run = None
+        self.exp_name = getattr(self, "exp_name", "")
 
         # Hardware Info
         self.num_cpu_threads = os.cpu_count()
@@ -105,6 +106,11 @@ class Project:
         if not _HAS_WANDB:
             return
         project_name = os.getenv("WANDB_PROJECT", "airhar")
+        if self.exp_name:
+            run_name = self.exp_name
+        else:
+            # auto-name: dataset_backbone_dim_hidden_seed
+            run_name = f"{self.dataset_name}_{self.Classification_backbone}_dim{self.dim}_H{self.Classification_hidden_size}_seed{self.seed}"
         self.wandb_run = wandb.init(
             project=project_name,
             name=run_name,
@@ -139,6 +145,9 @@ class Project:
         print("--------------------------------------------------------------------")
 
     def load_spec(self):
+        # Preserve critical CLI choices that we don't want spec.json to override
+        cli_backbone = getattr(self, "Classification_backbone", None)
+        cli_dim = getattr(self, "dim", None)
         # Get relative path to the spec file
         path_spec = os.path.join('datasets', self.dataset_name, 'spec.json')
     
@@ -148,6 +157,13 @@ class Project:
         for k, v in spec.items():
             setattr(self, k, v)
             self.hparams[k] = v
+        # Restore CLI intent for backbone/dim if provided
+        if cli_backbone is not None:
+            setattr(self, "Classification_backbone", cli_backbone)
+            self.hparams["Classification_backbone"] = cli_backbone
+        if cli_dim is not None:
+            setattr(self, "dim", cli_dim)
+            self.hparams["dim"] = cli_dim
 
     def add_arg(self, key: str, value: Any):
         setattr(self, key, value)

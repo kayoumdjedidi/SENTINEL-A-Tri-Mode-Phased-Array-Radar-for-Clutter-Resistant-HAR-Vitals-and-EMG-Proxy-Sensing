@@ -57,7 +57,8 @@ class CNNGRU(nn.Module):
 
     def forward(self, x):
         h_0 = torch.zeros(2, x.size(0), self.hidden_size).to(x.device)
-        if self.channels == 1:
+        # Only add channel dim if missing
+        if x.dim() == 3:
             x = x.unsqueeze(1)
         x = self.CNN(x)
         x = nn.functional.max_pool2d(x, kernel_size=(1, 1))

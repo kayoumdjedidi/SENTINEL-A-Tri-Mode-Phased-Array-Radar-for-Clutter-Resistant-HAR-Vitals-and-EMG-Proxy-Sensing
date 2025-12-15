@@ -94,6 +94,45 @@ class CoreModel(nn.Module):
                 stem_kernel=3,
                 drop_path_rate=0.1,
             )
+        elif backbone_type == 'radmamba_modif_1':
+            from backbones.RadMamba_modif_1 import RadMamba as RadMambaMod1
+            self.backbone = RadMambaMod1(
+                dim=dim,
+                dt_rank=dt_rank,
+                dim_inner=dim,
+                d_state=d_state,
+                num_classes=num_classes,
+                image_height=image_height,
+                image_width=image_width,
+                channels=channels,
+                dropout=dropout,
+                depth=4,
+                channel_confusion_layer=2,
+                channel_confusion_out_channels=channel_confusion_out_channels,
+                time_downsample_factor=time_downsample_factor,
+                optional_avg_pool=optional_avg_pool,
+                learned_pos=True,
+                head_hidden=dim ,
+                use_stem=True,
+                stem_kernel=3,
+                drop_path_rate=0.1,
+                use_se=True,
+            )
+        elif backbone_type == 'conv_mamba_pyr':
+            from backbones.ConvMambaPyramid import ConvMambaPyramid
+            self.backbone = ConvMambaPyramid(
+                dim=dim,
+                dt_rank=dt_rank,
+                dim_inner=dim,
+                d_state=d_state,
+                num_classes=num_classes,
+                image_height=image_height,
+                image_width=image_width,
+                channels=channels,
+                dropout=dropout,
+                depth=3,
+                drop_path_rate=0.1,
+            )
 
         else:
             raise ValueError(f"The backbone type '{self.backbone_type}' is not supported. Please add your own "
