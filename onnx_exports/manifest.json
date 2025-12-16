@@ -1,0 +1,44 @@
+{
+  "dataset": "CI4R",
+  "dim": 80,
+  "hidden": 64,
+  "image_height": 224,
+  "image_width": 224,
+  "channels": 1,
+  "device": "cpu",
+  "opset": 17,
+  "pyr_depth": 3,
+  "pyr_drop_path": 0.1,
+  "pyr_patch_width": 2,
+  "pyr_stem_out": 32,
+  "results": [
+    {
+      "backbone": "radmamba",
+      "ok": true,
+      "onnx_path": "onnx_exports/CI4R_radmamba_dim80_H64.onnx",
+      "input_shape": [
+        1,
+        1,
+        224,
+        224
+      ],
+      "params": 71289,
+      "file_bytes": 381815,
+      "error": null
+    },
+    {
+      "backbone": "conv_mamba_pyr_lite",
+      "ok": true,
+      "onnx_path": "onnx_exports/CI4R_conv_mamba_pyr_lite_dim80_H64.onnx",
+      "input_shape": [
+        1,
+        1,
+        224,
+        224
+      ],
+      "params": 188965,
+      "file_bytes": 961438,
+      "error": null
+    }
+  ]
+}
