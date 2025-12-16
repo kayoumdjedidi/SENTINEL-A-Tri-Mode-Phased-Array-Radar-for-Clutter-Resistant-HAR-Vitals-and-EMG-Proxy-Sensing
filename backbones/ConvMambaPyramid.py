@@ -83,6 +83,7 @@ class ConvMambaPyramid(nn.Module):
         dropout: float = 0.1,
         depth: int = 3,
         drop_path_rate: float = 0.1,
+        patch_width: int = 2,
     ):
         super().__init__()
         self.channels = channels
@@ -113,8 +114,8 @@ class ConvMambaPyramid(nn.Module):
             pw=patch_width,
         )
         self.patch_height = patch_height
-        self.patch_width = patch_width
-        patch_dim = dim * patch_height * patch_width  # after fuse to dim
+        self.patch_width = patch_width if patch_width > 0 else 1
+        patch_dim = dim * self.patch_height * self.patch_width  # after fuse to dim
         self.patch_proj = nn.Sequential(
             nn.Linear(patch_dim, dim),
             nn.LayerNorm(dim),
@@ -153,7 +154,19 @@ class ConvMambaPyramid(nn.Module):
         if x.shape[-1] % self.patch_width != 0:
             pad_w = self.patch_width - (x.shape[-1] % self.patch_width)
             x = nn.functional.pad(x, (0, pad_w, 0, 0))
-        tokens = self.patch(x)
+        # overlapping stripes if stride < patch_width
+        stride = 1 if self.patch_width > 1 else 1
+        if stride < self.patch_width:
+            # unfold with overlap
+            b, c, h, w = x.shape
+            # reshape to (b, c, h, num_patches, patch_width)
+            patches = x.unfold(3, self.patch_width, stride)
+            # combine h and num_patches
+            patches = patches.permute(0, 3, 2, 1, 4)  # b, np, h, c, pw
+            patches = patches.reshape(b, -1, h * c * self.patch_width)
+            tokens = patches
+        else:
+            tokens = self.patch(x)
         tokens = self.patch_proj(tokens)
 
         for blk in self.blocks:
