@@ -3080,3 +3080,1575 @@ sdr.rx_buffer_size = total
 Tone length:
 tone = np.ones(512, dtype=np.complex64)
 Retry. If you still get timeouts, Pluto needs reboot or a smaller rx_buffer_size (e.g., 2048) to confirm basic RX first.
+
+lets go back to our experiments with training differnet models, here is the latest context:
+lets try better changes in @backbones/RadMamba_modif_1.py think about the current model architecture really hard and then lets try to make something more radical and even if training takes much more time and more compute.
+
+Here’s a focused plan for “RadMamba_modif” to test concrete, low-effort tweaks without breaking the workflow. Pick 1–2 to start; each is a few-line change.
+
+A. Stronger regularization (cheap, often helps)
+
+Add Dropout after patch embedding or before output head (e.g., p=0.1–0.2).
+Add LayerNorm before BatchNorm/CNN (pre-norm) or after CNN (post-activation norm) to stabilize small batches.
+B. Token mixing boost
+
+Add a lightweight Conv2d stem before BatchNorm to sharpen local contrast: 3×3 conv -> BN -> SiLU, then existing CNN.
+Replace the two MaxPool2d in channel_confusion_layer==1 with AvgPool for slightly smoother downsampling (toggle via a flag).
+C. Positional encoding tweak
+
+Switch from fixed sin-cos to learned positional embeddings (add a learnable pos_embedding tensor) and compare; often helps small datasets.
+D. Classification head sharpening
+
+Add a small MLP head: LayerNorm -> Linear -> SiLU -> Dropout -> Linear(num_classes).
+E. Data/layout alignment
+
+Ensure single-channel inputs aren’t unsqueezed twice; you already patched the forward. Keep this in the mod version.
+F. Hyperparameter knobs to expose
+
+Make dropout, pool_type (max/avg), learned_pos (bool), and head_mlp_hidden configurable from args so you can sweep quickly.
+Suggested first experiment (minimal change)
+
+In RadMamba_modif: add Dropout(0.1) after to_patch_embedding and before the encoder loop; add an MLP head (dim -> dim -> num_classes with SiLU+dropout 0.1).
+Switch to learned positional embedding (same shape as current pos embedding).
+Keep everything else the same.
+How to compare
+
+Add a CLI arg to select backbone: e.g., --Classification_backbone radmamba_modif and import it in models.py similarly to the original.
+Run same command as before; log to W&B to compare validation/test accuracy and loss curves.
+If you want, I can implement the minimal mod (A+D+learned pos) in backbones/RadMamba_modif.py and wire it into models.py so you can run side-by-side.
+
+go ahead
+
+Implemented a modifiable RadMamba variant and wired it into training:
+
+Added backbones/RadMamba_modif.py tweaks: optional learnable position embeddings, patch dropout, stem conv, and MLP head; safe channel handling.
+Updated models.py to select radmamba_modif backbone with sensible defaults.
+Allowed radmamba_modif in CLI choices (arguments.py).
+Run a comparison using:
+
+python main.py --dataset_name CI4R --Classification_backbone radmamba_modif --dim 80 --Classification_hidden_size 80 --seed 0
+Then rerun with radmamba to compare.
+
+User attachment
+it performed worse than the previous one
+
+Thanks for the comparison—looks like the mod didn’t help. Let’s roll back to the vanilla RadMamba for your main runs and keep the mod only for later tinkering. Two quick options to recover baseline behavior:
+
+Easiest: use the original backbone in commands:
+
+--Classification_backbone radmamba
+and ignore the _modif variant.
+
+If you want to keep testing tweaks, try simpler, lower-risk knobs:
+
+Turn off the stem and learned pos in the mod: use_stem=False, learned_pos=False, head_hidden=None, patch_dropout=0 (set defaults accordingly).
+Or just add a small dropout after patch embedding (0.1) without changing positional encodings/head.
+Given your time, I’d stick with the original for CI4R/DIAT reproductions and log the better accuracy. We can iterate on minor tweaks later if needed.
+
+implement better mods on the modif model to try to make it better than the base one
+
+I added a more meaningful “RadMamba_modif” with stronger but lightweight tweaks:
+
+Stochastic depth (DropPath) per encoder layer (linearly 0→0.1 across depth).
+Optional stem conv (default on, kernel 3) before BN/CNN for better local contrast.
+Learned positional embedding retained; patch dropout kept.
+MLP head retained (dim→dim/2→num_classes).
+Wired the new knobs into models.py for --Classification_backbone radmamba_modif.
+Quick sanity check passes (out shape [B,11]).
+
+Run a new comparison:
+
+python main.py --dataset_name CI4R
+--Classification_backbone radmamba_modif
+--dim 80 --Classification_hidden_size 80 --seed 0
+(to compare, rerun with radmamba).
+
+If you want to adjust aggressiveness, edit defaults in models.py call: drop_path_rate (e.g., 0.05), stem_kernel (5), head_hidden (e.g., dim//2)
+
+
+Implemented a more aggressive RadMamba variant in backbones/RadMamba_modif_1.py:
+
+Added Squeeze-Excitation (optional) after the stem/CNN.
+Reworked channel-confusion stage:
+For cd_layer==2, dual depthwise multi-scale branches (3x3, 5x5) with SiLU and avg pooling, fused by summation.
+For cd_layer==1, ConvNeXt-style depthwise conv + LayerNorm + pointwise MLP residual, followed by pooling.
+Combined fixed sin-cos positional embedding with an optional learnable component.
+Forward path updated to use the new blocks and SE.
+This is a more radical architecture; expect different behavior and more capacity. Run with --Classification_backbone radmamba_modif_1 and compare against baseline. Adjust gains like drop_path_rate, use_se, and branch selection via existing args.
+
+how to try it out ?
+
+
+You can train it like any other backbone now:
+
+I’ve wired radmamba_modif_1 into the CLI and model factory.
+Run a quick sanity pass (CI4R example):
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone radmamba_modif_1 \
+  --dim 80 --Classification_hidden_size 80 \
+  --n_epochs 5 --seed 0
+(Adjust dim/lr/epochs as you like; the spec.json may override some defaults.)
+
+Compare against baseline:
+python main.py --dataset_name CI4R --Classification_backbone radmamba --dim 80 --Classification_hidden_size 80 --seed 0 --n_epochs 5
+Notes:
+
+The new model is in backbones/RadMamba_modif_1.py; it adds dual-branch depthwise conv fusion, ConvNeXt-style block, SE, mixed fixed+learned pos, and stochastic depth.
+Depth is still 1, so compute should stay modest. If you want more capacity, bump depth in the model call (models.py) or pass a higher dim.
+If you see over/underfitting, tune drop_path_rate (in models.py call), dropout, or turn off SE by setting use_se=False in the constructor.
+Run the short test first to ensure it trains/returns metrics, then launch longer runs once you’re happy.
+
+i want to make sure that the name of the expriencemt on weights and biasses reflects what im trying to do better and the name of the py file of the model im running
+
+
+You can now set the WandB run name explicitly via a new CLI flag.
+
+What changed:
+
+Added --exp_name to arguments.py.
+WandB run name now uses exp_name when provided (otherwise falls back to the model_id).
+How to use:
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone radmamba_modif_1 \
+  --dim 80 --Classification_hidden_size 80 \
+  --exp_name "radmamba_modif_1_ci4r_dim80"
+This exp_name will appear as the WandB run name, so you can reflect the model file/variant clearly.
+
+python main.py --dataset_name CI4R --Classification_backbone radmamba_modif_1 --dim 200 --Classification_hidden_size 80 --n_epochs 100 --seed 0 --exp_name "radmamba_modif_1_ci4r_dim80"
+is sending this command correct ?
+
+
+The command will run, but the name doesn’t match the settings you’re launching:
+
+You’re setting --dim 200 but --exp_name "radmamba_modif_1_ci4r_dim80". If you want the name to reflect the run, change it to something like radmamba_modif_1_ci4r_dim200.
+Everything else is fine; the spec.json will still supply other defaults (lr=0.005, batch size, etc.) unless you override them.
+Corrected example:
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone radmamba_modif_1 \
+  --dim 200 \
+  --Classification_hidden_size 80 \
+  --n_epochs 100 \
+  --seed 0 \
+  --exp_name "radmamba_modif_1_ci4r_dim200"
+why do the training ephocs take only one second to train compared to the base one ? i dont mind if it needs more compute if its going to give better results
+
+
+An epoch is so fast because:
+
+CI4R (PNG) is tiny: ~519 train samples, batch 16 → ~33 steps/epoch.
+The model depth is only 1 encoder block (both base and modif_1); even with dim=200 that’s a small network.
+You’re on a 4060, so each batch is very quick.
+If you want to spend more compute to chase accuracy, make the model heavier and/or give it more data per epoch. Quick knobs you can change right now:
+
+Increase depth of the encoder blocks
+
+In models.py where we instantiate RadMamba_modif_1, change depth=1 to 3 or 4.
+Or pass a new arg and wire it through; fastest is to hardcode depth=3 for the modif_1 block and rerun.
+Expand the token MLP/head
+
+Set head_hidden = dim (instead of dim//2) to give a larger classifier head.
+Broader channel fusion
+
+Use channel_confusion_layer=2 to activate the dual-branch conv fusion (more params/FLOPs).
+More data per epoch
+
+Extract frames instead of single PNGs (continuous mode) or use stride < frame_length to create multiple windows per spectrogram; that increases steps/epoch.
+Regularization balance
+
+If you deepen the network, drop_path_rate can stay ~0.1; if shallow, reduce it to ~0.05 to avoid hurting capacity.
+Example heavier run (after setting depth=3 in models.py for modif_1):
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone radmamba_modif_1 \
+  --dim 200 --Classification_hidden_size 80 \
+  --seed 0 \
+  --exp_name "radmamba_modif1_depth3_dim200_conf2"
+If you’d like, I can apply the depth and head_hidden tweaks in the code so you can rerun immediately.
+
+no need, i want to make sure that the weights and biassaes automatically puts the relevant settingsl ike what model what dataset etc in the name of the experiment without me having to write it manually
+
+
+W&B run names now auto-encode your settings if you don’t pass --exp_name.
+
+Behavior:
+
+If you set --exp_name, it’s used as the run name.
+Otherwise, it auto-names as {dataset}_{backbone}_dim{dim}_H{hidden}_seed{seed} (e.g., CI4R_radmamba_modif_1_dim200_H80_seed0).
+Just run your command as usual; names will reflect the model/dataset without manual typing.
+
+now i want to run with the cnn backbone
+
+
+To run with a CNN backbone, choose one of the existing CNN-based backbones already wired into models.py:
+
+cnnlstm
+cnngru
+resnet
+Example command (ResNet):
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone resnet \
+  --Classification_hidden_size 20 \
+  --dim 80 \
+  --seed 0
+Example (CNN-LSTM):
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone cnnlstm \
+  --Classification_hidden_size 16 \
+  --dim 80 \
+  --seed 0
+Pick hidden sizes from the existing scripts (see run_experiments_CI4R.sh arrays). No code changes needed—just set --Classification_backbone to the CNN variant you want.
+
+i did but its experiment name was still : 100%|██████████████████████████████████████████████████████████████████████████| 33/33 [00:00<00:00, 62.71it/s]
+100%|███████████████████████████████████████████████████████████████████████████| 9/9 [00:00<00:00, 152.28it/s]
+{'EPOCH': 98, 'N_EPOCH': 100, 'TIME:': '1.07622539', 'LR': '0.00007813', 'BATCH_SIZE': 16, 'N_PARAM': 71289, 'BACKBONE': 'radmamba', 'HIDDEN_SIZE': 64, 'DIM': 80, 'DT_RANK': 0, 'D_STATE': 4, 'TRAIN_LOSS': '0.00078711', 'TEST_LOSS': '0.60641243', 'TEST_ACCURACY': '83.58208955'}
+100%|██████████████████████████████████████████████████████████████████████████| 33/33 [00:00<00:00, 62.37it/s]
+100%|███████████████████████████████████████████████████████████████████████████| 9/9 [00:00<00:00, 154.22it/s]
+{'EPOCH': 99, 'N_EPOCH': 100, 'TIME:': '1.08613269', 'LR': '0.00007813', 'BATCH_SIZE': 16, 'N_PARAM': 71289, 'BACKBONE': 'radmamba', 'HIDDEN_SIZE': 64, 'DIM': 80, 'DT_RANK': 0, 'D_STATE': 4, 'TRAIN_LOSS': '0.00078861', 'TEST_LOSS': '0.60643688', 'TEST_ACCURACY': '83.58208955'}
+Training Completed...
+
+wandb:
+wandb: Run history:
+wandb: epoch ▁▁▁▁▂▂▂▂▃▃▃▃▃▄▄▄▄▅▅▅▅▅▅▅▅▅▆▆▆▆▆▇▇▇▇█████
+wandb: lr ███████▄▄▄▄▄▄▄▄▃▃▃▃▃▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb: test_accuracy ▁▄▆▆▇▆▇▇▆███████████████████████████████
+wandb: test_loss █▄▄▃▂▄▁▂▃▂▁▁▁▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂
+wandb: train_loss █▇▆▅▄▄▃▃▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:
+wandb: Run summary:
+wandb: epoch 99
+wandb: lr 8e-05
+wandb: test_accuracy 83.58209
+wandb: test_loss 0.60644
+wandb: train_loss 0.00079
+wandb:
+wandb: 🚀 View run CI4R_radmamba_dim80_H64_seed0 at: https://wandb.ai/kayoum-inrs/airhar/runs/tez5k56z
+wandb: ⭐️ View project at: https://wandb.ai/kayoum-inrs/airhar
+wandb: Synced 5 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20251215_162708-tez5k56z/logs
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+The spec.json was overriding your CLI backbone choice. I updated project.py so Classification_backbone (and dim) set on the CLI are preserved even after loading datasets/<dataset>/spec.json. Now your run names will follow the backbone you pass.
+
+Try again:
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone cnnlstm \
+  --dim 80 --Classification_hidden_size 80 \
+  --seed 0
+or any other backbone; the wandb run name will auto-encode the dataset/backbone/dim now.
+
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python main.py
+--dataset_name CI4R
+--Classification_backbone cnnlstm
+--dim 80 --Classification_hidden_size 80
+--seed 0
+::: Are Deterministic Algorithms Enabled: False
+####################################################################################################
+
+Step: Classification
+####################################################################################################
+::: Available GPUs: 1
+::: Using GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU
+::: Number of DPD Model Parameters: 328523
+::: Best Model Save Path: ./save/CI4R/classify/CL_S_0_M_CNNLSTM_B_16_LR_0.0050_H_64_P_328523_FL_224_ST_1.pt
+::: Log-History Path: ./log/CI4R/classify/history/CL_S_0_M_CNNLSTM_B_16_LR_0.0050_H_64_P_328523_FL_224_ST_1.csv
+::: Log-Best Path: ./log/CI4R/classify/best/CL_S_0_M_CNNLSTM_B_16_LR_0.0050_H_64_P_328523_FL_224_ST_1.csv
+wandb: Currently logged in as: kayoum (kayoum-inrs) to https://api.wandb.ai. Use wandb login --relogin to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /home/kayoum/projects/AIRHAR/wandb/run-20251215_163020-suezyi8m
+wandb: Run wandb offline to turn off syncing.
+wandb: Syncing run CI4R_cnnlstm_dim80_H64_seed0
+wandb: ⭐️ View project at https://wandb.ai/kayoum-inrs/airhar
+wandb: 🚀 View run at https://wandb.ai/kayoum-inrs/airhar/runs/suezyi8m
+Starting training...
+0%| | 0/33 [00:00<?, ?it/s]
+Traceback (most recent call last):
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/einops/einops.py", line 531, in reduce
+recipe = _prepare_transformation_recipe(pattern, reduction, axes_names=tuple(axes_lengths), ndim=len(shape))
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/einops/einops.py", line 366, in _prepare_transformation_recipe
+raise EinopsError(f"Wrong shape: expected {len(left.composition)} dims. Received {ndim}-dim tensor.")
+einops.EinopsError: Wrong shape: expected 4 dims. Received 5-dim tensor.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/main.py", line 14, in <module>
+classify.main(proj)
+File "/home/kayoum/projects/AIRHAR/steps/classify.py", line 78, in main
+proj.train(net=net_cas,
+File "/home/kayoum/projects/AIRHAR/project.py", line 318, in train
+net = net_train(log=self.log_train,
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/modules/train_funcs.py", line 36, in net_train
+out = net(iq_data)
+^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/models.py", line 140, in forward
+out = self.backbone(x)
+^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/backbones/CnnLstm.py", line 58, in forward
+x = rearrange(x, 'b c h w -> b (c h) w')
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/einops/einops.py", line 600, in rearrange
+return reduce(tensor, pattern, reduction="rearrange", **axes_lengths)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/einops/einops.py", line 542, in reduce
+raise EinopsError(message + "\n {}".format(e))
+einops.EinopsError: Error while processing rearrange-reduction pattern "b c h w -> b (c h) w".
+Input tensor shape: torch.Size([16, 1, 1, 224, 224]). Additional info: {}.
+Wrong shape: expected 4 dims. Received 5-dim tensor.
+wandb:
+wandb: 🚀 View run CI4R_cnnlstm_dim80_H64_seed0 at:
+wandb: Find logs at: wandb/run-20251215_163020-suezyi8m/logs
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+The CNN backbones were unsqueezing an extra channel dimension. I fixed both:
+
+backbones/CnnLstm.py: only unsqueezes if the input is 3D (no channel dim).
+backbones/CnnGru.py: same fix.
+Now the 5D-shape error should be gone. Re-run your CNN experiments, e.g.:
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone cnnlstm \
+  --dim 80 --Classification_hidden_size 80 \
+  --seed 0
+W&B run names will auto-encode the backbone/dim/seed as before.
+
+is it possible to come up with our own architecture for a model that could surpass all the backbones we have now ?
+
+
+Yes, but it will be a research-style effort. Given your data scale (CI4R is small) and goal (micro‑Doppler HAR), a custom architecture could mix the strengths of conv stems (local spectral denoising), Mamba/SSM blocks (sequence modeling), and multi-scale tokenization, while staying lightweight.
+
+A practical high-upside direction:
+
+Hybrid “Conv-Mamba Pyramid”
+
+Stem: Dual-branch depthwise separable convs (3×3, 5×5), SE/CBAM, with frequency‑axis max/avg pooling to emphasize Doppler energy.
+Patching: Overlapping vertical (time) stripe tokens (e.g., full Doppler height × small time width) to preserve Doppler continuity.
+Backbone: 3–4 Mamba/SSM blocks with:
+Local conv mixing (1D) + bidirectional selective scan (as in your modif_1).
+Cross-scale fusion: at least two scales (224×224 → 112×56), fuse via cross-attention-free gating (conv + sigmoid) to stay light.
+Head: Mean + max pooling over tokens → LayerNorm → 2-layer MLP.
+If you want something that might surpass current backbones while still trainable on your GPU, I can draft a new backbone file (e.g., backbones/ConvMambaPyramid.py) with depth=3, dim=128–160, two scales, SE, and drop path 0.1. We can wire it into models.py so you can A/B test.
+
+Let me know and I’ll implement the concrete model code and the wiring so you can run it.
+
+go ahead
+
+
+We added a new custom backbone conv_mamba_pyr and wired it in. To try it:
+
+python main.py \
+  --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --seed 0
+Notes:
+
+conv_mamba_pyr is defined in backbones/ConvMambaPyramid.py.
+Choices now include conv_mamba_pyr (see arguments.py), and models.py instantiates it with depth=3 and drop_path=0.1.
+If you want more capacity, bump dim (e.g., 160) or adjust depth in models.py.
+W&B run names auto-encode dataset/backbone/dim/seed unless you set --exp_name.
+The 5D input error for CNN backbones is fixed; you can re-run cnnlstm/cnngru now.
+
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python main.py --dataset_name DIAT --Classification_backbone conv_mamba_pyr --dim 80 --Classification_hidden_size 80 --n_epochs 30 --seed 0
+::: Are Deterministic Algorithms Enabled: False
+####################################################################################################
+
+Step: Classification
+####################################################################################################
+::: Available GPUs: 1
+::: Using GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU
+::: Number of DPD Model Parameters: 1114986
+::: Best Model Save Path: ./save/DIAT/classify/CL_S_0_M_CONV_MAMBA_PYR_B_16_LR_0.0001_H_80_P_1114986_FL_224_ST_1.pt
+::: Log-History Path: ./log/DIAT/classify/history/CL_S_0_M_CONV_MAMBA_PYR_B_16_LR_0.0001_H_80_P_1114986_FL_224_ST_1.csv
+::: Log-Best Path: ./log/DIAT/classify/best/CL_S_0_M_CONV_MAMBA_PYR_B_16_LR_0.0001_H_80_P_1114986_FL_224_ST_1.csv
+wandb: Currently logged in as: kayoum (kayoum-inrs) to https://api.wandb.ai. Use wandb login --relogin to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: Tracking run with wandb version 0.23.1
+wandb: Run data is saved locally in /home/kayoum/projects/AIRHAR/wandb/run-20251215_171043-ik55c2ue
+wandb: Run wandb offline to turn off syncing.
+wandb: Syncing run DIAT_conv_mamba_pyr_dim80_H80_seed0
+wandb: ⭐️ View project at https://wandb.ai/kayoum-inrs/airhar
+wandb: 🚀 View run at https://wandb.ai/kayoum-inrs/airhar/runs/ik55c2ue
+Starting training...
+0%| | 0/166 [00:01<?, ?it/s]
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/main.py", line 14, in <module>
+classify.main(proj)
+File "/home/kayoum/projects/AIRHAR/steps/classify.py", line 78, in main
+proj.train(net=net_cas,
+File "/home/kayoum/projects/AIRHAR/project.py", line 318, in train
+net = net_train(log=self.log_train,
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/modules/train_funcs.py", line 36, in net_train
+out = net(iq_data)
+^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/models.py", line 155, in forward
+out = self.backbone(x)
+^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/backbones/ConvMambaPyramid.py", line 156, in forward
+tokens = self.patch_proj(tokens)
+^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/container.py", line 250, in forward
+input = module(input)
+^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+return self._call_impl(*args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+return forward_call(args, **kwargs)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/normalization.py", line 229, in forward
+return F.layer_norm(
+^^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/functional.py", line 2901, in layer_norm
+return torch.layer_norm(
+^^^^^^^^^^^^^^^^^
+RuntimeError: Given normalized_shape=[11946], expected input with shape [, 11946], but got input of size[16, 112, 35840]
+wandb:
+wandb: 🚀 View run DIAT_conv_mamba_pyr_dim80_H80_seed0 at:
+wandb: Find logs at: wandb/run-20251215_171043-ik55c2ue/logs
+
+
+I fixed the ConvMambaPyramid patch projection dimension mismatch:
+
+Removed the incorrect patch_dim calculation and LayerNorm over the wrong shape.
+Now patch_proj is Linear(patch_dim → dim) -> LayerNorm(dim) -> Dropout.
+Added width padding respecting patch_width (2) before patching.
+Re-run your command:
+
+python main.py \
+  --dataset_name DIAT \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 80 --Classification_hidden_size 80 \
+  --n_epochs 30 --seed 0
+The layernorm shape error should be resolved.
+
+User attachment
+its performing only slightly worse than the base radmamba with a .2 pecent increase, and worse on CI4R do you think you can make it even better ?
+
+
+We can try a few targeted tweaks to squeeze more performance, especially on CI4R, without exploding compute:
+
+Depth and dim bump (moderate):
+
+Increase ConvMambaPyramid depth to 4 and dim to 128 for CI4R; keep DIAT at dim 80 if it’s already strong.
+Set drop_path_rate ~0.05 for CI4R to reduce over-regularization at higher depth.
+Better tokenization for CI4R:
+
+Use narrower time stripes (patch_width=1) to keep more temporal detail.
+Add an option to do overlapping stripes (stride=1) so you get ~2× tokens.
+Slightly richer head:
+
+Use head_hidden = dim for ConvMambaPyramid head.
+If you want, I can implement these as defaults for ConvMambaPyramid and add CLI toggles for patch_width and depth, so you can try:
+
+python main.py --dataset_name CI4R --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 --seed 0 --exp_name "conv_pyr_ci4r_dim128_d4_pw1"
+Let me know and I’ll patch the model and wiring accordingly.
+
+go ahead
+
+
+Added tunable knobs for ConvMambaPyramid and overlapping stripes:
+
+New CLI flags: --pyr_depth (default 3), --pyr_drop_path (0.1), --pyr_patch_width (default 2).
+Patch width is now adjustable, and overlapping stripe tokens are used when stride < patch_width.
+Model wiring passes these args into ConvMambaPyramid.
+Try a heavier CI4R run, e.g.:
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --pyr_depth 4 --pyr_drop_path 0.05 --pyr_patch_width 1 \
+  --seed 0
+This ups capacity (dim 128, depth 4), reduces drop path, and uses narrow stripes for more temporal detail. Adjust as needed and compare to baseline.
+
+AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python main.py --dataset_name CI4R
+--Classification_backbone conv_mamba_pyr
+--dim 128 --Classification_hidden_size 80
+--pyr_depth 4 --pyr_drop_path 0.05 --pyr_patch_width 1
+--seed 0
+::: Are Deterministic Algorithms Enabled: False
+####################################################################################################
+
+Step: Classification
+####################################################################################################
+::: Available GPUs: 1
+::: Using GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/main.py", line 14, in <module>
+classify.main(proj)
+File "/home/kayoum/projects/AIRHAR/steps/classify.py", line 30, in main
+net_classifier = model.CoreModel(
+^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/models.py", line 133, in init
+depth=self.hparams.get("pyr_depth", 3),
+^^^^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1964, in getattr
+raise AttributeError(
+AttributeError: 'CoreModel' object has no attribute 'hparams'
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+I fixed the ConvMambaPyr arg handling by pulling pyr_depth, pyr_drop_path, and pyr_patch_width from self.args (with fallbacks), so the AttributeError is resolved.
+
+Re-run your command:
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --pyr_depth 4 --pyr_drop_path 0.05 --pyr_patch_width 1 \
+  --seed 0
+User attachment
+its still not that much better
+
+
+We’re close to baseline but not clearly better; key differences for CI4R likely hinge on over-regularization and tokenization. Three quick, higher-yield tweaks to try:
+
+Reduce regularization on CI4R
+
+Lower pyr_drop_path to 0.0–0.02.
+Keep pyr_depth=4, dim=128, patch_width=1.
+Command:
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --pyr_depth 4 --pyr_drop_path 0.02 --pyr_patch_width 1 \
+  --seed 0
+Slightly larger head / fewer pools
+
+Set channel_confusion_layer=1 (ConvNeXt block) to avoid dual pooling loss, and add head_hidden=dim (already default for pyramid; if not, we can bump).
+Also, set optional_avg_pool=False to keep more width.
+Command:
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --pyr_depth 4 --pyr_drop_path 0.02 --pyr_patch_width 1 \
+  --channel_confusion_layer 1 --optional_avg_pool 0 \
+  --seed 0
+Longer training with smaller LR (since DIAT is already near ceiling)
+
+For CI4R, try LR 1e-3 and 150 epochs:
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr \
+  --dim 128 --Classification_hidden_size 80 \
+  --pyr_depth 4 --pyr_drop_path 0.02 --pyr_patch_width 1 \
+  --lr 1e-3 --n_epochs 150 \
+  --seed 0
+If you want, I can hardcode the lower drop_path default for pyramid and set channel_confusion_layer=1 for CI4R runs, but the quickest path is to launch the commands above and compare.
+
+only the last one gave good resilts, lets make a version of this model that focused on keeping as mich perforemance as possible while being more more light weight and less complex for inference on the raspi
+
+
+Done — I created a lightweight variant conv_mamba_pyr_lite aimed at Raspberry Pi inference.
+
+What changed
+
+Added backbones/ConvMambaPyramidLite.py with ~250k params (vs ~1M+), by:
+Compact stem (stem_out=32) + aggressive pooling (H,W)=(8,2) to shrink token dims
+Stripe tokens with patch_width=4
+2 lightweight SSM blocks (single-direction, pscan=False for portability)
+Wired into models.py as --Classification_backbone conv_mamba_pyr_lite
+Added CLI knobs:
+--pyr_depth (default 3, but lite defaults to 2 in models)
+--pyr_drop_path
+--pyr_patch_width
+--pyr_stem_out (default 32)
+How to run it
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr_lite \
+  --dim 64 --Classification_hidden_size 80 \
+  --pyr_depth 2 --pyr_drop_path 0.02 --pyr_patch_width 4 --pyr_stem_out 32 \
+  --seed 0
+For DIAT:
+
+python main.py --dataset_name DIAT \
+  --Classification_backbone conv_mamba_pyr_lite \
+  --dim 64 --Classification_hidden_size 80 \
+  --pyr_depth 2 --pyr_drop_path 0.02 --pyr_patch_width 4 --pyr_stem_out 32 \
+  --seed 0
+If you want “max performance while still Pi‑friendly”, try --dim 80 and keep depth 2; that’s usually the best tradeoff.
+
+3 files changed
++171
+-1
+Undo
+
+Review
+arguments.py
++2
+-1
+ConvMambaPyramidLite.py
++148
+-0
+models.py
++21
+-0
+AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python main.py --dataset_name CI4R
+--Classification_backbone conv_mamba_pyr_lite
+--dim 64 --Classification_hidden_size 80
+--pyr_depth 2 --pyr_drop_path 0.02 --pyr_patch_width 4 --pyr_stem_out 32
+--seed 0
+::: Are Deterministic Algorithms Enabled: False
+####################################################################################################
+
+Step: Classification
+####################################################################################################
+::: Available GPUs: 1
+::: Using GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/main.py", line 14, in <module>
+classify.main(proj)
+File "/home/kayoum/projects/AIRHAR/steps/classify.py", line 30, in main
+net_classifier = model.CoreModel(
+^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/models.py", line 146, in init
+pyr_depth = getattr(self.args, "pyr_depth", 2)
+^^^^^^^^^
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1964, in getattr
+raise AttributeError(
+AttributeError: 'CoreModel' object has no attribute 'args'
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+That crash was because CoreModel doesn’t have self.args. I fixed it by passing the pyramid knobs into CoreModel directly (from Project → steps/classify.py), and updated both conv_mamba_pyr and conv_mamba_pyr_lite to use those parameters.
+
+Retry your command exactly as-is:
+
+python main.py --dataset_name CI4R \
+  --Classification_backbone conv_mamba_pyr_lite \
+  --dim 64 --Classification_hidden_size 80 \
+  --pyr_depth 2 --pyr_drop_path 0.02 --pyr_patch_width 4 --pyr_stem_out 32 \
+  --seed 0
+2 files changed
++12
+-18
+Undo
+
+Review
+models.py
++7
+-17
+classify.py
++5
+-1
+now how can i show what the model loooks like and how lite it is etc for presentation purposes and compare it to the base one
+
+
+Do two things: (1) parameter/FLOP/latency table, (2) model diagram.
+
+1) Params + size + latency (most convincing)
+Run these for both radmamba and conv_mamba_pyr_lite:
+
+Params + checkpoint size:
+python - <<'PY'
+import os, torch, models
+def count_params(m): return sum(p.numel() for p in m.parameters())
+def run(backbone):
+    m = models.CoreModel(hidden_size=80,num_layers=1,backbone_type=backbone,
+        dim=64,dt_rank=0,d_state=4,image_height=224,image_width=224,num_classes=11,
+        channels=1,dropout=0.1,optional_avg_pool=False,channel_confusion_layer=1,
+        channel_confusion_out_channels=1,time_downsample_factor=4,
+        pyr_depth=2,pyr_drop_path=0.02,pyr_patch_width=4,pyr_stem_out=32)
+    print(backbone, "params:", count_params(m))
+run("radmamba")
+run("conv_mamba_pyr_lite")
+PY
+CPU inference latency (batch=1):
+python - <<'PY'
+import time, torch, models
+torch.set_num_threads(4)
+x = torch.randn(1,1,224,224)
+def bench(backbone):
+    m = models.CoreModel(hidden_size=80,num_layers=1,backbone_type=backbone,
+        dim=64,dt_rank=0,d_state=4,image_height=224,image_width=224,num_classes=11,
+        channels=1,dropout=0.1,optional_avg_pool=False,channel_confusion_layer=1,
+        channel_confusion_out_channels=1,time_downsample_factor=4,
+        pyr_depth=2,pyr_drop_path=0.02,pyr_patch_width=4,pyr_stem_out=32).eval()
+    with torch.no_grad():
+        for _ in range(20): m(x)  # warmup
+        t0=time.time()
+        for _ in range(200): m(x)
+        t1=time.time()
+    print(backbone, "ms/inf:", (t1-t0)/200*1000)
+bench("radmamba")
+bench("conv_mamba_pyr_lite")
+PY
+Put the results in a slide table: Accuracy (CI4R/DIAT), Params, ms/inference, checkpoint MB.
+
+2) Model “looks like” (diagram)
+
+Quick text diagram (slide-friendly):
+
+radmamba: BN2d → Conv+pool → stripe tokens → Mamba block(s) → head
+conv_mamba_pyr_lite: DWConv stem + pooling → stripe tokens → 2 LiteSSMBlocks → mean+linear
+Optional real graph (if you want): export a PNG with torchviz:
+
+pip install torchviz graphviz
+python - <<'PY'
+import torch
+from torchviz import make_dot
+import models
+m = models.CoreModel(hidden_size=80,num_layers=1,backbone_type="conv_mamba_pyr_lite",
+    dim=64,dt_rank=0,d_state=4,image_height=224,image_width=224,num_classes=11,
+    channels=1,dropout=0.1,optional_avg_pool=False,channel_confusion_layer=1,
+    channel_confusion_out_channels=1,time_downsample_factor=4,
+    pyr_depth=2,pyr_drop_path=0.02,pyr_patch_width=4,pyr_stem_out=32).eval()
+x = torch.randn(1,1,224,224)
+y = m(x)
+make_dot(y, params=dict(m.named_parameters())).render("conv_mamba_pyr_lite_graph", format="png")
+print("wrote conv_mamba_pyr_lite_graph.png")
+PY
+If you paste the param/latency outputs you get, I can help you format a clean “Baseline vs Lite” comparison slide.
+
+turn this into one script that does all this so i can run it and compare models and runs etc
+
+
+Added a single script tools/compare_models.py that prints a compact comparison table (params, checkpoint MB, latency, and optional test accuracy) across multiple backbones.
+
+Example usage:
+
+Latency + params (CPU):
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+Add test accuracy (uses datasets/CI4R/ci4r_data.h5):
+python tools/compare_models.py --dataset CI4R --device cuda --batch 16 --eval \
+  --backbones radmamba conv_mamba_pyr_lite cnnlstm cnngru --auto_ckpt
+Tune lite knobs for the pyramid models:
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 --eval --auto_ckpt \
+  --backbones conv_mamba_pyr_lite \
+  --dim 64 --hidden 64 --pyr_depth 2 --pyr_drop_path 0.02 --pyr_patch_width 4 --pyr_stem_out 32
+It will auto-pick the latest checkpoint per backbone from save/<dataset>/classify/ when you pass --auto_ckpt.
+
+1 file changed
+Undo
+
+Review
+compare_models.py
++234
+-0
+(AIRHAR) kayoum@kayoum:/projects/AIRHAR$ python tools/compare_models.py --dataset CI4R --device cpu --batch 1 --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 233, in <module>
+main()
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 210, in main
+model = build_model(spec, ds_spec, device)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 71, in build_model
+import models
+ModuleNotFoundError: No module named 'models'
+(AIRHAR) kayoum@kayoum:/projects/AIRHAR$
+
+
+Fixed tools/compare_models.py so it can import models when run as a script by adding the repo root to sys.path.
+
+Re-run the same command:
+
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 \
+  --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+1 file changed
+Undo
+
+Review
+compare_models.py
++5
+-1
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python tools/compare_models.py --dataset CI4R --device cpu --batch 1 --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/init.py:566: UserWarning: Initializing zero-element tensors is a no-op
+warnings.warn("Initializing zero-element tensors is a no-op")
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 238, in <module>
+
+main()
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 215, in main
+model = build_model(spec, ds_spec, device)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 102, in build_model
+m.load_state_dict(state, strict=True)
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 2629, in load_state_dict
+raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for CoreModel:
+size mismatch for backbone.patch_proj.0.weight: copying a param with shape torch.Size([64, 3584]) from checkpoint, the shape in current model is torch.Size([80, 3584]).
+size mismatch for backbone.patch_proj.0.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.0.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.0.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.0.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.0.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.1.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.1.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.1.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.1.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.2.weight: copying a param with shape torch.Size([11, 64]) from checkpoint, the shape in current model is torch.Size([11, 80]).
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+Your --auto_ckpt picked a checkpoint trained with a different dim/hidden than the defaults you passed to the compare script, so load_state_dict fails (your ckpt is dim=64, but the script built dim=80 by default).
+
+I updated tools/compare_models.py so that when --auto_ckpt is used it will:
+
+Parse the checkpoint filename and automatically set hidden to match the checkpoint (H_64 etc.), avoiding most mismatches.
+If there’s still a mismatch (e.g., dim differs), it now throws a clear message telling you to pass matching flags.
+To run your exact comparison, pass the matching dim for each model run. For your case (checkpoint shows dim=64 in weights), do:
+
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 \
+  --dim 64 \
+  --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+If you want to compare different dims, run the script twice (once per dim) or disable --auto_ckpt and point --ckpt manually (I can add that if you want).
+
+1 file changed
+Undo
+
+Review
+compare_models.py
++45
+-3
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python tools/compare_models.py --dataset CI4R --device cpu --batch 1
+--dim 64
+--backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/init.py:566: UserWarning: Initializing zero-element tensors is a no-op
+warnings.warn("Initializing zero-element tensors is a no-op")
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 133, in build_model
+m.load_state_dict(state, strict=True)
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 2629, in load_state_dict
+raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for CoreModel:
+size mismatch for backbone.cls_token: copying a param with shape torch.Size([1, 1, 80]) from checkpoint, the shape in current model is torch.Size([1, 1, 64]).
+size mismatch for backbone.to_patch_embedding.2.weight: copying a param with shape torch.Size([80, 112]) from checkpoint, the shape in current model is torch.Size([64, 112]).
+size mismatch for backbone.to_patch_embedding.2.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.to_patch_embedding.3.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.to_patch_embedding.3.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.forward_conv1d.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.forward_conv1d.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.backward_conv1d.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.backward_conv1d.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_forward.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_forward.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_backward.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_backward.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm1.A_log: copying a param with shape torch.Size([80, 4]) from checkpoint, the shape in current model is torch.Size([64, 4]).
+size mismatch for backbone.layers.0.ssm1.D: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm1.deltaBC_layer.weight: copying a param with shape torch.Size([8, 80]) from checkpoint, the shape in current model is torch.Size([8, 64]).
+size mismatch for backbone.layers.0.ssm1.dt_proj_layer.weight: copying a param with shape torch.Size([80, 0]) from checkpoint, the shape in current model is torch.Size([64, 0]).
+size mismatch for backbone.layers.0.ssm1.dt_proj_layer.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm2.A_log: copying a param with shape torch.Size([80, 4]) from checkpoint, the shape in current model is torch.Size([64, 4]).
+size mismatch for backbone.layers.0.ssm2.D: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm2.deltaBC_layer.weight: copying a param with shape torch.Size([8, 80]) from checkpoint, the shape in current model is torch.Size([8, 64]).
+size mismatch for backbone.layers.0.ssm2.dt_proj_layer.weight: copying a param with shape torch.Size([80, 0]) from checkpoint, the shape in current model is torch.Size([64, 0]).
+size mismatch for backbone.layers.0.ssm2.dt_proj_layer.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj1.weight: copying a param with shape torch.Size([80, 80, 3]) from checkpoint, the shape in current model is torch.Size([64, 64, 3]).
+size mismatch for backbone.layers.0.proj1.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj2.weight: copying a param with shape torch.Size([80, 80, 3]) from checkpoint, the shape in current model is torch.Size([64, 64, 3]).
+size mismatch for backbone.layers.0.proj2.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj3.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.proj3.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.1.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.1.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.2.weight: copying a param with shape torch.Size([11, 80]) from checkpoint, the shape in current model is torch.Size([11, 64]).
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 280, in <module>
+main()
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 257, in main
+model = build_model(spec, ds_spec, device)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 135, in build_model
+raise RuntimeError(
+RuntimeError: Checkpoint mismatch for backbone=radmamba. Pass matching --dim/--hidden/--pyr_* flags or disable --auto_ckpt.
+Error(s) in loading state_dict for CoreModel:
+size mismatch for backbone.cls_token: copying a param with shape torch.Size([1, 1, 80]) from checkpoint, the shape in current model is torch.Size([1, 1, 64]).
+size mismatch for backbone.to_patch_embedding.2.weight: copying a param with shape torch.Size([80, 112]) from checkpoint, the shape in current model is torch.Size([64, 112]).
+size mismatch for backbone.to_patch_embedding.2.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.to_patch_embedding.3.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.to_patch_embedding.3.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.forward_conv1d.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.forward_conv1d.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.backward_conv1d.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.backward_conv1d.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_forward.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_forward.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_backward.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm_backward.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.norm.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm1.A_log: copying a param with shape torch.Size([80, 4]) from checkpoint, the shape in current model is torch.Size([64, 4]).
+size mismatch for backbone.layers.0.ssm1.D: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm1.deltaBC_layer.weight: copying a param with shape torch.Size([8, 80]) from checkpoint, the shape in current model is torch.Size([8, 64]).
+size mismatch for backbone.layers.0.ssm1.dt_proj_layer.weight: copying a param with shape torch.Size([80, 0]) from checkpoint, the shape in current model is torch.Size([64, 0]).
+size mismatch for backbone.layers.0.ssm1.dt_proj_layer.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm2.A_log: copying a param with shape torch.Size([80, 4]) from checkpoint, the shape in current model is torch.Size([64, 4]).
+size mismatch for backbone.layers.0.ssm2.D: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.ssm2.deltaBC_layer.weight: copying a param with shape torch.Size([8, 80]) from checkpoint, the shape in current model is torch.Size([8, 64]).
+size mismatch for backbone.layers.0.ssm2.dt_proj_layer.weight: copying a param with shape torch.Size([80, 0]) from checkpoint, the shape in current model is torch.Size([64, 0]).
+size mismatch for backbone.layers.0.ssm2.dt_proj_layer.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj1.weight: copying a param with shape torch.Size([80, 80, 3]) from checkpoint, the shape in current model is torch.Size([64, 64, 3]).
+size mismatch for backbone.layers.0.proj1.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj2.weight: copying a param with shape torch.Size([80, 80, 3]) from checkpoint, the shape in current model is torch.Size([64, 64, 3]).
+size mismatch for backbone.layers.0.proj2.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.layers.0.proj3.weight: copying a param with shape torch.Size([80, 80, 1]) from checkpoint, the shape in current model is torch.Size([64, 64, 1]).
+size mismatch for backbone.layers.0.proj3.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.1.weight: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.1.bias: copying a param with shape torch.Size([80]) from checkpoint, the shape in current model is torch.Size([64]).
+size mismatch for backbone.output_head.2.weight: copying a param with shape torch.Size([11, 80]) from checkpoint, the shape in current model is torch.Size([11, 64]).
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+Your RadMamba checkpoint was trained with dim=80 (that’s why it’s trying to load [1,1,80] into a [1,1,64] model). With --auto_ckpt, the compare script must build each model using the checkpoint’s own dim/H.
+
+I updated tools/compare_models.py to also parse DIM from the checkpoint filename and automatically set spec.dim when --auto_ckpt is used.
+
+Re-run (you can omit --dim now if you want; it’ll use the ckpt dims):
+
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 \
+  --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+If a checkpoint filename doesn’t include DIM (older runs), you’ll still need to pass the matching --dim manually for that backbone.
+
+1 file changed
+Undo
+
+Review
+compare_models.py
++9
+-2
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$ python tools/compare_models.py --dataset CI4R --device cpu --batch 1
+--backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/init.py:566: UserWarning: Initializing zero-element tensors is a no-op
+warnings.warn("Initializing zero-element tensors is a no-op")
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 138, in build_model
+m.load_state_dict(state, strict=True)
+File "/home/kayoum/miniconda3/envs/AIRHAR/lib/python3.11/site-packages/torch/nn/modules/module.py", line 2629, in load_state_dict
+raise RuntimeError(
+RuntimeError: Error(s) in loading state_dict for CoreModel:
+size mismatch for backbone.patch_proj.0.weight: copying a param with shape torch.Size([64, 3584]) from checkpoint, the shape in current model is torch.Size([80, 3584]).
+size mismatch for backbone.patch_proj.0.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.0.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.0.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.0.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.0.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.1.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.1.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.1.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.1.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.2.weight: copying a param with shape torch.Size([11, 64]) from checkpoint, the shape in current model is torch.Size([11, 80]).
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 287, in <module>
+main()
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 264, in main
+model = build_model(spec, ds_spec, device)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/kayoum/projects/AIRHAR/tools/compare_models.py", line 140, in build_model
+raise RuntimeError(
+RuntimeError: Checkpoint mismatch for backbone=conv_mamba_pyr_lite. Pass matching --dim/--hidden/--pyr_* flags or disable --auto_ckpt.
+Error(s) in loading state_dict for CoreModel:
+size mismatch for backbone.patch_proj.0.weight: copying a param with shape torch.Size([64, 3584]) from checkpoint, the shape in current model is torch.Size([80, 3584]).
+size mismatch for backbone.patch_proj.0.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.patch_proj.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.0.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.0.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.0.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.0.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.0.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.0.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.norm.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.dw.weight: copying a param with shape torch.Size([64, 1, 5]) from checkpoint, the shape in current model is torch.Size([80, 1, 5]).
+size mismatch for backbone.blocks.1.dw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.pw.weight: copying a param with shape torch.Size([64, 64, 1]) from checkpoint, the shape in current model is torch.Size([80, 80, 1]).
+size mismatch for backbone.blocks.1.pw.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.A_log: copying a param with shape torch.Size([64, 4]) from checkpoint, the shape in current model is torch.Size([80, 4]).
+size mismatch for backbone.blocks.1.ssm.D: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.ssm.deltaBC_layer.weight: copying a param with shape torch.Size([8, 64]) from checkpoint, the shape in current model is torch.Size([8, 80]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.weight: copying a param with shape torch.Size([64, 0]) from checkpoint, the shape in current model is torch.Size([80, 0]).
+size mismatch for backbone.blocks.1.ssm.dt_proj_layer.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.blocks.1.out.weight: copying a param with shape torch.Size([64, 64]) from checkpoint, the shape in current model is torch.Size([80, 80]).
+size mismatch for backbone.blocks.1.out.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.weight: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.1.bias: copying a param with shape torch.Size([64]) from checkpoint, the shape in current model is torch.Size([80]).
+size mismatch for backbone.head.2.weight: copying a param with shape torch.Size([11, 64]) from checkpoint, the shape in current model is torch.Size([11, 80]).
+(AIRHAR) kayoum@kayoum:~/projects/AIRHAR$
+
+
+Your checkpoints don’t encode DIM in the filename, so --auto_ckpt can’t reliably rebuild the model shape. I fixed tools/compare_models.py to infer dim directly from the checkpoint tensors (it looks for the final classifier weight shaped (num_classes, dim), or falls back to cls_token).
+
+Re-run the same command:
+
+python tools/compare_models.py --dataset CI4R --device cpu --batch 1 \
+  --backbones radmamba conv_mamba_pyr_lite --auto_ckpt
+If you still hit a mismatch after this, it means the checkpoint also differs in pyramid-specific knobs (pyr_patch_width, pyr_depth, pyr_stem_out), and you’ll need to pass those to match the run that produced the checkpoint.
+
+1 file changed
+Undo
+
+Review
+compare_models.py
++26
+-0
+give a script that would generate the onnx of all my models in backbones folder so that i could visualize their architecture
+
+
+Here’s a script that exports ONNX for every backbone you can select via --Classification_backbone (includes anything in backbones/ that’s wired in models.py). It also writes a small summary JSON per export.
+
+Create tools/export_onnx_all.py with this content and run it from repo root.
+
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+
+import torch
+
+import models
+from datasets import __init__  # noqa: F401
+
+
+BACKBONES = [
+    "radmamba",
+    "radmamba_modif",
+    "radmamba_modif_1",
+    "conv_mamba_pyr",
+    "conv_mamba_pyr_lite",
+    "resnet",
+    "bilstm",
+    "cnnlstm",
+    "cnngru",
+]
+
+
+def build_model(backbone: str, dataset: str, dim: int, hidden: int, pyr_depth: int, pyr_drop: float, pyr_pw: int, pyr_stem: int):
+    # read dataset spec.json (for num_classes/channels/height/width/etc.)
+    spec_path = Path("datasets") / dataset / "spec.json"
+    spec = json.loads(spec_path.read_text())
+
+    m = models.CoreModel(
+        hidden_size=hidden,
+        num_layers=int(spec.get("Classification_num_layers", 1)),
+        backbone_type=backbone,
+        dim=dim,
+        dt_rank=int(spec.get("dt_rank", 0)),
+        d_state=int(spec.get("d_state", 4)),
+        image_height=int(spec.get("image_height", 224)),
+        image_width=int(spec.get("frame_length", 224)),
+        num_classes=int(spec.get("num_classes", 11)),
+        channels=int(spec.get("channels", 1)),
+        dropout=float(spec.get("dropout", 0.0)),
+        optional_avg_pool=bool(spec.get("optional_avg_pool", False)),
+        channel_confusion_layer=int(spec.get("channel_confusion_layer", 1)),
+        channel_confusion_out_channels=int(spec.get("channel_confusion_out_channels", 1)),
+        time_downsample_factor=int(spec.get("time_downsample_factor", 4)),
+        pyr_depth=pyr_depth,
+        pyr_drop_path=pyr_drop,
+        pyr_patch_width=pyr_pw,
+        pyr_stem_out=pyr_stem,
+    ).eval()
+
+    return m, spec
+
+
+def export_one(m, spec, out_path: Path):
+    c = int(spec.get("channels", 1))
+    h = int(spec.get("image_height", 224))
+    w = int(spec.get("frame_length", 224))
+
+    x = torch.randn(1, c, h, w)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.onnx.export(
+        m,
+        x,
+        str(out_path),
+        export_params=True,
+        opset_version=17,
+        do_constant_folding=True,
+        input_names=["input"],
+        output_names=["logits"],
+        dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
+    )
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", default="CI4R", help="Which spec.json to use for shapes/classes (CI4R or DIAT).")
+    ap.add_argument("--out_dir", default="onnx_exports")
+    ap.add_argument("--dim", type=int, default=80)
+    ap.add_argument("--hidden", type=int, default=64)
+    ap.add_argument("--pyr_depth", type=int, default=2)
+    ap.add_argument("--pyr_drop", type=float, default=0.02)
+    ap.add_argument("--pyr_patch_width", type=int, default=4)
+    ap.add_argument("--pyr_stem_out", type=int, default=32)
+    ap.add_argument("--only", nargs="*", default=None, help="Optional subset of backbones to export.")
+    args = ap.parse_args()
+
+    out_dir = Path(args.out_dir)
+
+    chosen = args.only if args.only else BACKBONES
+    results = []
+
+    for b in chosen:
+        try:
+            m, spec = build_model(
+                backbone=b,
+                dataset=args.dataset,
+                dim=args.dim,
+                hidden=args.hidden,
+                pyr_depth=args.pyr_depth,
+                pyr_drop=args.pyr_drop,
+                pyr_pw=args.pyr_patch_width,
+                pyr_stem=args.pyr_stem_out,
+            )
+            out_path = out_dir / args.dataset / f"{b}_dim{args.dim}_H{args.hidden}.onnx"
+            export_one(m, spec, out_path)
+            results.append({"backbone": b, "onnx": str(out_path)})
+            print(f"exported: {out_path}")
+        except Exception as e:
+            results.append({"backbone": b, "error": str(e)})
+            print(f"failed: {b}: {e}")
+
+    (out_dir / args.dataset).mkdir(parents=True, exist_ok=True)
+    (out_dir / args.dataset / "export_summary.json").write_text(json.dumps(results, indent=2))
+    print(f"wrote: {out_dir / args.dataset / 'export_summary.json'}")
+
+
+if __name__ == "__main__":
+    main()
+Run:
+
+python tools/export_onnx_all.py --dataset CI4R --dim 80 --hidden 64
+Notes:
+
+Some models may fail to export cleanly to ONNX (common with RNNs/SSM/custom ops). The script will log failures in onnx_exports/<dataset>/export_summary.json.
+For visualization, open the .onnx files in Netron.
+
+Created
+export_onnx_backbones.py
+#!/usr/bin/env python3
+"""
+Export AIRHAR backbones to ONNX for visualization (e.g., in Netron).
+
+This tries multiple plausible input shapes per backbone because some backbones
+expect [B,C,H,W] while others historically used [B,H,W] or even [B,T,C,H,W].
+
+Usage:
+  python tools/export_onnx_backbones.py --dataset CI4R
+  python tools/export_onnx_backbones.py --dataset DIAT --out_dir onnx_exports --device cpu
+  python tools/export_onnx_backbones.py --dataset CI4R --backbones radmamba conv_mamba_pyr_lite
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import traceback
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+import torch
+
+
+@dataclass
+class ExportResult:
+    backbone: str
+    ok: bool
+    onnx_path: Optional[str]
+    input_shape: Optional[List[int]]
+    params: Optional[int]
+    file_bytes: Optional[int]
+    error: Optional[str]
+
+
+def _load_dataset_spec(dataset: str) -> Dict[str, Any]:
+    spec_path = REPO_ROOT / "datasets" / dataset / "spec.json"
+    if not spec_path.exists():
+        raise FileNotFoundError(f"Missing dataset spec: {spec_path}")
+    return json.loads(spec_path.read_text())
+
+
+def _candidate_input_shapes(
+    batch: int, channels: int, h: int, w: int
+) -> List[Tuple[str, Tuple[int, ...]]]:
+    return [
+        ("BCHW", (batch, channels, h, w)),
+        ("BHW", (batch, h, w)),
+        ("BTC_HW", (batch, 1, channels, h, w)),  # (time=1)
+        ("BC_THW", (batch, channels, 1, h, w)),  # (time=1) alternative layout
+    ]
+
+
+def _build_model(
+    backbone: str,
+    spec: Dict[str, Any],
+    dim: int,
+    hidden: int,
+    pyr_depth: int,
+    pyr_drop_path: float,
+    pyr_patch_width: int,
+    pyr_stem_out: int,
+    device: torch.device,
+) -> torch.nn.Module:
+    import models
+
+    m = models.CoreModel(
+        hidden_size=hidden,
+        num_layers=int(spec.get("Classification_num_layers", 1)),
+        backbone_type=backbone,
+        dim=dim,
+        dt_rank=int(spec.get("dt_rank", 0)),
+        d_state=int(spec.get("d_state", 4)),
+        image_height=int(spec.get("image_height", 224)),
+        image_width=int(spec.get("frame_length", spec.get("image_width", 224))),
+        num_classes=int(spec.get("num_classes", 11)),
+        channels=int(spec.get("channels", 1)),
+        dropout=float(spec.get("dropout", 0.0)),
+        optional_avg_pool=int(spec.get("optional_avg_pool", 0)),
+        channel_confusion_layer=int(spec.get("channel_confusion_layer", 0)),
+        channel_confusion_out_channels=int(spec.get("channel_confusion_out_channels", 1)),
+        time_downsample_factor=int(spec.get("time_downsample_factor", 1)),
+        pyr_depth=pyr_depth,
+        pyr_drop_path=pyr_drop_path,
+        pyr_patch_width=pyr_patch_width,
+        pyr_stem_out=pyr_stem_out,
+    ).to(device)
+    m.eval()
+    return m
+
+
+def _param_count(model: torch.nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters())
+
+
+def _try_forward_shapes(
+    model: torch.nn.Module,
+    shapes: Sequence[Tuple[str, Tuple[int, ...]]],
+    device: torch.device,
+) -> Tuple[Tuple[str, Tuple[int, ...]], torch.Tensor]:
+    last_err: Optional[BaseException] = None
+    for _, shape in shapes:
+        try:
+            x = torch.randn(*shape, device=device, dtype=torch.float32)
+            with torch.no_grad():
+                y = model(x)
+            if not isinstance(y, torch.Tensor):
+                raise RuntimeError(f"Model returned non-tensor output type: {type(y)}")
+            return (("shape", shape), x)
+        except BaseException as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"No compatible input shape found. Last error: {last_err}")
+
+
+def _dynamic_axes_for(shape: Tuple[int, ...]) -> Dict[str, Dict[int, str]]:
+    # Always make batch dimension dynamic.
+    return {"input": {0: "batch"}, "logits": {0: "batch"}}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Export AIRHAR backbones to ONNX.")
+    parser.add_argument("--dataset", default="CI4R", help="Dataset name (e.g., CI4R, DIAT, UoG20).")
+    parser.add_argument("--out_dir", default="onnx_exports", help="Output directory for ONNX files.")
+    parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"], help="Device for tracing/export.")
+    parser.add_argument("--batch", type=int, default=1, help="Batch size for dummy input.")
+    parser.add_argument("--dim", type=int, default=80, help="Model dim (used by Mamba-based backbones).")
+    parser.add_argument(
+        "--hidden",
+        type=int,
+        default=None,
+        help="Hidden size for CNN/RNN backbones. Defaults to dataset spec Classification_hidden_size or 64.",
+    )
+    parser.add_argument("--opset", type=int, default=17, help="ONNX opset version.")
+    parser.add_argument(
+        "--backbones",
+        nargs="*",
+        default=None,
+        help="Subset of backbones to export. Default: all backbones wired in models.py.",
+    )
+    parser.add_argument("--pyr_depth", type=int, default=3, help="conv_mamba_pyr(*) depth.")
+    parser.add_argument("--pyr_drop_path", type=float, default=0.1, help="conv_mamba_pyr(*) drop-path rate.")
+    parser.add_argument("--pyr_patch_width", type=int, default=2, help="conv_mamba_pyr(*) patch stripe width.")
+    parser.add_argument("--pyr_stem_out", type=int, default=32, help="conv_mamba_pyr_lite stem out channels.")
+
+    args = parser.parse_args()
+
+    spec = _load_dataset_spec(args.dataset)
+    h = int(args.hidden if args.hidden is not None else spec.get("Classification_hidden_size", 64))
+    h_img = int(spec.get("image_height", 224))
+    w_img = int(spec.get("frame_length", spec.get("image_width", 224)))
+    channels = int(spec.get("channels", 1))
+    device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Backbones wired in models.py (kept explicit so we don't export helper modules).
+    default_backbones = [
+        "vgg16",
+        "resnet",
+        "bilstm",
+        "cnnlstm",
+        "cnngru",
+        "radmamba",
+        "radmamba_modif",
+        "radmamba_modif_1",
+        "conv_mamba_pyr",
+        "conv_mamba_pyr_lite",
+    ]
+    backbones = args.backbones if args.backbones else default_backbones
+
+    results: List[ExportResult] = []
+    for backbone in backbones:
+        onnx_path: Optional[str] = None
+        input_shape: Optional[List[int]] = None
+        params: Optional[int] = None
+        file_bytes: Optional[int] = None
+        error: Optional[str] = None
+
+        try:
+            model = _build_model(
+                backbone=backbone,
+                spec=spec,
+                dim=int(args.dim),
+                hidden=h,
+                pyr_depth=int(args.pyr_depth),
+                pyr_drop_path=float(args.pyr_drop_path),
+                pyr_patch_width=int(args.pyr_patch_width),
+                pyr_stem_out=int(args.pyr_stem_out),
+                device=device,
+            )
+            params = _param_count(model)
+
+            shapes = _candidate_input_shapes(args.batch, channels, h_img, w_img)
+            (_, shape), x = _try_forward_shapes(model, shapes, device=device)
+            input_shape = list(shape)
+
+            fname = f"{args.dataset}_{backbone}_dim{args.dim}_H{h}.onnx"
+            path = out_dir / fname
+            dynamic_axes = _dynamic_axes_for(shape)
+
+            torch.onnx.export(
+                model,
+                x,
+                str(path),
+                export_params=True,
+                opset_version=int(args.opset),
+                do_constant_folding=True,
+                input_names=["input"],
+                output_names=["logits"],
+                dynamic_axes=dynamic_axes,
+            )
+
+            onnx_path = str(path)
+            file_bytes = path.stat().st_size if path.exists() else None
+        except BaseException:
+            error = traceback.format_exc(limit=50)
+
+        results.append(
+            ExportResult(
+                backbone=backbone,
+                ok=onnx_path is not None and error is None,
+                onnx_path=onnx_path,
+                input_shape=input_shape,
+                params=params,
+                file_bytes=file_bytes,
+                error=error,
+            )
+        )
+
+    manifest = {
+        "dataset": args.dataset,
+        "dim": int(args.dim),
+        "hidden": h,
+        "image_height": h_img,
+        "image_width": w_img,
+        "channels": channels,
+        "device": str(device),
+        "opset": int(args.opset),
+        "pyr_depth": int(args.pyr_depth),
+        "pyr_drop_path": float(args.pyr_drop_path),
+        "pyr_patch_width": int(args.pyr_patch_width),
+        "pyr_stem_out": int(args.pyr_stem_out),
+        "results": [asdict(r) for r in results],
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+
+    ok_count = sum(1 for r in results if r.ok)
+    fail_count = len(results) - ok_count
+    print(f"ONNX export done. ok={ok_count} fail={fail_count}. See {out_dir/'manifest.json'}")
+    if fail_count:
+        print("Failed backbones:")
+        for r in results:
+            if not r.ok:
+                print(f" - {r.backbone}")
+
+
+if __name__ == "__main__":
+    main()
+
+Edited
+export_onnx_backbones.py
+    last_err: Optional[BaseException] = None
+    for _, shape in shapes:
+    for name, shape in shapes:
+        try:
+                raise RuntimeError(f"Model returned non-tensor output type: {type(y)}")
+            return (("shape", shape), x)
+            return ((name, shape), x)
+        except BaseException as e:
+    main()
+
+
+
+
+
+
+
+
+Edited
+export_onnx_backbones.py
+
+            # Torch 2.9+ defaults to the Dynamo-based exporter which depends on onnxscript.
+            # Use the legacy path (dynamo=False) for portability in minimal environments.
+            torch.onnx.export(
+                model,
+                x,
+                (x,),
+                str(path),
+                dynamic_axes=dynamic_axes,
+                dynamo=False,
+                external_data=False,
+                optimize=False,
+            )
+
+
+Edited
+export_onnx_backbones.py
+
+    try:
+        import onnx  # noqa: F401
+    except Exception:
+        raise SystemExit(
+            "Missing dependency: `onnx`.\n"
+            "Install it in your AIRHAR env, e.g.:\n"
+            "  pip install onnx\n"
+            "Optional (for the new exporter):\n"
+            "  pip install onnxscript\n"
+        )
+
+    spec = _load_dataset_spec(args.dataset)
+
+
