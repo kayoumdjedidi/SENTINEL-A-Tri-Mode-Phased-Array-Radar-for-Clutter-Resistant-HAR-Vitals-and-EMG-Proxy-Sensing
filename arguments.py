@@ -45,8 +45,13 @@ def get_arguments():
 
     # Classification Model Settings
     parser.add_argument('--Classification_backbone', default='radmamba',
-                        choices=['vgg','resnet','bilstm', 'cnnlstm', 'cnngru', 'radmamba', 'radmamba_modif', 'radmamba_modif_1', 'conv_mamba_pyr'], help='DPD model Recurrent layer type')
+                        choices=['vgg','resnet','bilstm', 'cnnlstm', 'cnngru', 'radmamba', 'radmamba_modif', 'radmamba_modif_1', 'conv_mamba_pyr', 'conv_mamba_pyr_lite'], help='DPD model Recurrent layer type')
     parser.add_argument('--exp_name', default='', type=str, help='Optional experiment name override (used in wandb run name)')
+    # ConvMambaPyramid specific
+    parser.add_argument('--pyr_depth', type=int, default=3, help='ConvMambaPyramid depth')
+    parser.add_argument('--pyr_drop_path', type=float, default=0.1, help='ConvMambaPyramid drop path rate')
+    parser.add_argument('--pyr_patch_width', type=int, default=2, help='Patch width for stripe tokens (ConvMambaPyramid)')
+    parser.add_argument('--pyr_stem_out', type=int, default=32, help='Stem output channels for ConvMambaPyramidLite')
     parser.add_argument('--Classification_hidden_size', default=64, type=int, help='Hidden size of DPD backbone.')
     parser.add_argument('--Classification_num_layers', default=1, type=int, help='Number of layers of the DPD backbone.')
 

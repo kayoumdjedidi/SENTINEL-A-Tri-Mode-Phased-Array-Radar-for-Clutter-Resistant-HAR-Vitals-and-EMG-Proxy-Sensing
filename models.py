@@ -10,7 +10,8 @@ from typing import Any, cast, Dict, List, Optional, Union
 
 
 class CoreModel(nn.Module):
-    def __init__(self, hidden_size, num_layers, backbone_type, dim, dt_rank, d_state, image_height, image_width,num_classes, channels, dropout, optional_avg_pool, channel_confusion_layer, channel_confusion_out_channels, time_downsample_factor):
+    def __init__(self, hidden_size, num_layers, backbone_type, dim, dt_rank, d_state, image_height, image_width, num_classes, channels, dropout, optional_avg_pool, channel_confusion_layer, channel_confusion_out_channels, time_downsample_factor,
+                 pyr_depth: int = 3, pyr_drop_path: float = 0.1, pyr_patch_width: int = 2, pyr_stem_out: int = 32):
         super(CoreModel, self).__init__()
         self.output_size = 1  
         self.hidden_size = hidden_size
@@ -130,8 +131,26 @@ class CoreModel(nn.Module):
                 image_width=image_width,
                 channels=channels,
                 dropout=dropout,
-                depth=3,
-                drop_path_rate=0.1,
+                depth=pyr_depth,
+                drop_path_rate=pyr_drop_path,
+                patch_width=pyr_patch_width,
+            )
+        elif backbone_type == 'conv_mamba_pyr_lite':
+            from backbones.ConvMambaPyramidLite import ConvMambaPyramidLite
+            self.backbone = ConvMambaPyramidLite(
+                dim=dim,
+                dt_rank=dt_rank,
+                dim_inner=dim,
+                d_state=d_state,
+                num_classes=num_classes,
+                image_height=image_height,
+                image_width=image_width,
+                channels=channels,
+                dropout=dropout,
+                depth=pyr_depth,
+                drop_path_rate=pyr_drop_path,
+                patch_width=pyr_patch_width,
+                stem_out=pyr_stem_out,
             )
 
         else:

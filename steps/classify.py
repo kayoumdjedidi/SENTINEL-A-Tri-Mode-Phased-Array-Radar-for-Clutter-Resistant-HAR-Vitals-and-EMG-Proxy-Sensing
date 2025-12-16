@@ -42,7 +42,11 @@ def main(proj: Project):
                           channel_confusion_layer=proj.channel_confusion_layer,
                           channel_confusion_out_channels=proj.channel_confusion_out_channels,
                           time_downsample_factor=proj.time_downsample_factor,
-                          optional_avg_pool=proj.optional_avg_pool)
+                          optional_avg_pool=proj.optional_avg_pool,
+                          pyr_depth=getattr(proj, "pyr_depth", 3),
+                          pyr_drop_path=getattr(proj, "pyr_drop_path", 0.1),
+                          pyr_patch_width=getattr(proj, "pyr_patch_width", 2),
+                          pyr_stem_out=getattr(proj, "pyr_stem_out", 32))
     net_classifier_params = count_net_params(net_classifier)
     print("::: Number of DPD Model Parameters: ", net_classifier_params)
     classifier_model_id = proj.gen_classifier_model_id(net_classifier_params)

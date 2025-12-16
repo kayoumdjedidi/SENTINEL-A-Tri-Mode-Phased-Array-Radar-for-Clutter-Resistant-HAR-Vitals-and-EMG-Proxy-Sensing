@@ -1,0 +1,57 @@
+{
+  "os":  "Linux-5.15.133.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2025-12-15T17:11:22.257496Z",
+  "args":  [
+    "--dataset_name",
+    "CI4R",
+    "--Classification_backbone",
+    "conv_mamba_pyr",
+    "--dim",
+    "128",
+    "--Classification_hidden_size",
+    "80",
+    "--pyr_depth",
+    "4",
+    "--pyr_drop_path",
+    "0.02",
+    "--pyr_patch_width",
+    "1",
+    "--seed",
+    "0"
+  ],
+  "program":  "/home/kayoum/projects/AIRHAR/main.py",
+  "codePath":  "main.py",
+  "codePathLocal":  "main.py",
+  "git":  {
+    "remote":  "https://github.com/kayoumdjedidi/SENTINEL-A-Tri-Mode-Phased-Array-Radar-for-Clutter-Resistant-HAR-Vitals-and-EMG-Proxy-Sensing.git",
+    "commit":  "b42962c6bc1c6d78a6845cadfbad8444093340da"
+  },
+  "email":  "djedidikayoum@gmail.com",
+  "root":  "/home/kayoum/projects/AIRHAR",
+  "host":  "kayoum",
+  "executable":  "/home/kayoum/miniconda3/envs/AIRHAR/bin/python",
+  "cpu_count":  8,
+  "cpu_count_logical":  16,
+  "gpu":  "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "1081101176832",
+      "used":  "248881684480"
+    }
+  },
+  "memory":  {
+    "total":  "16343437312"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 4060 Laptop GPU",
+      "memoryTotal":  "8585740288",
+      "architecture":  "Ada",
+      "uuid":  "GPU-3629ec0a-ec0f-b652-91d6-a4a9848e5888"
+    }
+  ],
+  "cudaVersion":  "13.0",
+  "writerId":  "kjosdjdfd0sfc7fp7g4r8sne5f5y1gd9"
+}

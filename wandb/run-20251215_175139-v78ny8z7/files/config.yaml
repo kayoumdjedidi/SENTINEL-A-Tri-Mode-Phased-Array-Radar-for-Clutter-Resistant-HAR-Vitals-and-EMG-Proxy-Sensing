@@ -1,0 +1,155 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            vr0wwhav7jvsk0f1eqh61d8his1oai8v:
+                args:
+                    - --dataset_name
+                    - CI4R
+                    - --Classification_backbone
+                    - conv_mamba_pyr
+                    - --dim
+                    - "128"
+                    - --Classification_hidden_size
+                    - "80"
+                    - --pyr_depth
+                    - "4"
+                    - --pyr_drop_path
+                    - "0.05"
+                    - --pyr_patch_width
+                    - "1"
+                    - --seed
+                    - "0"
+                codePath: main.py
+                codePathLocal: main.py
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "1081101176832"
+                        used: "248820477952"
+                email: djedidikayoum@gmail.com
+                executable: /home/kayoum/miniconda3/envs/AIRHAR/bin/python
+                git:
+                    commit: b42962c6bc1c6d78a6845cadfbad8444093340da
+                    remote: https://github.com/kayoumdjedidi/SENTINEL-A-Tri-Mode-Phased-Array-Radar-for-Clutter-Resistant-HAR-Vitals-and-EMG-Proxy-Sensing.git
+                gpu: NVIDIA GeForce RTX 4060 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      memoryTotal: "8585740288"
+                      name: NVIDIA GeForce RTX 4060 Laptop GPU
+                      uuid: GPU-3629ec0a-ec0f-b652-91d6-a4a9848e5888
+                host: kayoum
+                memory:
+                    total: "16343437312"
+                os: Linux-5.15.133.1-microsoft-standard-WSL2-x86_64-with-glibc2.35
+                program: /home/kayoum/projects/AIRHAR/main.py
+                python: CPython 3.11.14
+                root: /home/kayoum/projects/AIRHAR
+                startedAt: "2025-12-15T16:51:39.496320Z"
+                writerId: vr0wwhav7jvsk0f1eqh61d8his1oai8v
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+                - 5
+            "2":
+                - 1
+                - 5
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.11.14
+            "5": 0.23.1
+            "10":
+                - 20
+            "12": 0.23.1
+            "13": linux-x86_64
+Classification_backbone:
+    value: conv_mamba_pyr
+Classification_hidden_size:
+    value: 64
+Classification_num_layers:
+    value: 1
+accelerator:
+    value: cuda
+batch_size:
+    value: 16
+batch_size_eval:
+    value: 16
+channel_confusion_layer:
+    value: 1
+channel_confusion_out_channels:
+    value: 1
+channels:
+    value: 1
+continuous:
+    value: false
+d_state:
+    value: 4
+dataset_name:
+    value: CI4R
+decay_factor:
+    value: 0.5
+device:
+    value: cuda:0
+devices:
+    value: 0
+dim:
+    value: 128
+dropout:
+    value: 0
+dt_rank:
+    value: 0
+eval_test:
+    value: 1
+eval_val:
+    value: 0
+exp_name:
+    value: ""
+frame_length:
+    value: 224
+grad_clip_val:
+    value: 200
+image_height:
+    value: 224
+log_precision:
+    value: 8
+loss_type:
+    value: CrossEntropy
+lr:
+    value: 0.005
+lr_end:
+    value: 1e-06
+lr_schedule:
+    value: 1
+n_epochs:
+    value: 100
+num_classes:
+    value: 11
+opt_type:
+    value: adamw
+optional_avg_pool:
+    value: false
+patience:
+    value: 15
+pyr_depth:
+    value: 4
+pyr_drop_path:
+    value: 0.05
+pyr_patch_width:
+    value: 1
+re_level:
+    value: soft
+seed:
+    value: 0
+step:
+    value: classify
+stride:
+    value: 1
+time_downsample_factor:
+    value: 4
