@@ -95,6 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="RF output frequency")
     p.add_argument("--rx-gain", type=int, default=70,
                    help="RX gain dB (−3 to 70)")
+    p.add_argument("--sample-rate", type=float, default=0.6e6, metavar="Hz",
+                   help="ADC sample rate. Baseline=0.6e6 (best close-range SNR). "
+                        "Use 4e6 for wide range coverage.")
     p.add_argument("--history-len", type=int, default=200,
                    help="Micro-Doppler history depth in frames")
     p.add_argument("--save-dir", type=Path, default=Path("recordings"),
@@ -362,16 +365,24 @@ class SentinelWindow(QMainWindow):
 
         label_kw = {"color": "#ccc", "font-size": "10pt"}
 
-        # ── Row 0, col 0: Range profile (standard: x=range, y=power) ──
-        p_rp = glw.addPlot(row=0, col=0, title="Range Profile")
-        p_rp.setLabel("bottom", "Range",         units="m",   **label_kw)
-        p_rp.setLabel("left",   "Power (log₁₀)",              **label_kw)
+        # ── Row 0, col 0: Beat-frequency FFT (baseline-style, dBFS) ───
+        # Identical to the waterfall baseline's FFT panel — shows the raw
+        # beat spectrum from the mean chirp.  One clear peak per target.
+        p_rp = glw.addPlot(row=0, col=0, title="Beat-Freq FFT  (mean chirp, dBFS)")
+        p_rp.setLabel("bottom", "Range",  units="m",   **label_kw)
+        p_rp.setLabel("left",   "dBFS",               **label_kw)
         p_rp.setXRange(0.0, r_display, padding=0)
+        p_rp.setYRange(-100, 0, padding=0)
         p_rp.enableAutoRange("xy", False)
         p_rp.showGrid(x=True, y=True, alpha=0.2)
 
-        self._rp_curve = p_rp.plot(
+        # Main FFT curve (yellow) — raw beat spectrum (no MTI, no 2D FFT)
+        self._fft_curve = p_rp.plot(
             pen=pg.mkPen(color=(255, 200, 50), width=1.5),
+        )
+        # Range profile overlay (orange, faint) — peak-Doppler from 2D map
+        self._rp_curve = p_rp.plot(
+            pen=pg.mkPen(color=(255, 120, 30), width=1.0, style=Qt.DotLine),
         )
         self._cfar_curve = p_rp.plot(
             pen=pg.mkPen(color=(50, 200, 255), width=1.2, style=Qt.DashLine),
@@ -444,6 +455,20 @@ class SentinelWindow(QMainWindow):
     def on_capture(self, cap: CaptureResult) -> None:
         t0  = time.monotonic()
         cfg = cap.cfg
+
+        # ── 0. Baseline-style beat-frequency FFT (raw, pre-MTI) ───────
+        # Coherently average all chirps then 1D FFT with Blackman window.
+        # This is identical to what RADAR_FFT_Waterfall_baseline.py shows.
+        try:
+            chirp_mean = cap.chirp_matrix.mean(axis=0)   # (n_range,)
+            w_bl = np.blackman(len(chirp_mean))
+            fft_abs = np.abs(np.fft.fftshift(np.fft.fft(chirp_mean * w_bl)))
+            fft_dbfs = 20.0 * np.log10(
+                np.maximum(fft_abs / np.sum(w_bl), 1e-15) / 2.0**11
+            )
+            beat_fft_pos = fft_dbfs[self._pos_mask]  # positive range only
+        except Exception:
+            beat_fft_pos = None
 
         # ── 1. DSP pipeline ────────────────────────────────────────────
         result = process_frame(
@@ -536,10 +561,18 @@ class SentinelWindow(QMainWindow):
             ceil = floor + 0.1
 
         # ── 8. Update plots ────────────────────────────────────────────
-        # Range profile (x=range, y=power) — standard orientation
-        self._rp_curve.setData(x=range_pos, y=profile)
+        # Beat-FFT panel: raw dBFS spectrum (yellow) + RD range profile (orange dots)
+        if beat_fft_pos is not None:
+            self._fft_curve.setData(x=range_pos, y=beat_fft_pos)
+        # Range profile overlay: normalise log10 map to approximate dBFS scale
+        # Shift so the maximum sits at ~-10 dBFS for visual alignment
+        if profile.max() > 0:
+            p_norm = (profile / profile.max()) * 30.0 - 80.0  # roughly -80 to -50 dBFS
+            self._rp_curve.setData(x=range_pos, y=p_norm)
         if cfar_thresh_arr is not None:
-            self._cfar_curve.setData(x=range_pos, y=cfar_thresh_arr)
+            if cfar_thresh_arr.max() > 0:
+                c_norm = (cfar_thresh_arr / (profile.max() + 1e-9)) * 30.0 - 80.0
+                self._cfar_curve.setData(x=range_pos, y=c_norm)
         self._gate_line_rp.setValue(range_m)
         self._gate_line_rd.setValue(range_m)
 
@@ -756,7 +789,7 @@ def main(argv: list[str] | None = None) -> int:
     hw = HardwareParams(
         rpi_uri      = args.rpi_uri,
         sdr_uri      = args.sdr_uri,
-        sample_rate  = 4e6,
+        sample_rate  = args.sample_rate,
         center_freq  = 2.1e9,
         signal_freq  = 100e3,
         rx_gain      = args.rx_gain,
@@ -770,16 +803,24 @@ def main(argv: list[str] | None = None) -> int:
     backend = ContinuousSawtoothBackend(hw)
     cfg     = backend.connect()
 
+    # Compute target-leakage separation in range bins (want >= 5 for clean detection)
+    slope      = cfg.chirp_bw / cfg.ramp_time_s
+    bin_hz     = cfg.sample_rate / cfg.n_frame
+    beat_2m_hz = 2.0 * slope * 2.0 / 3e8
+    sep_bins   = beat_2m_hz / bin_hz
     print(
         f"[sentinel_radar] "
         f"rf={cfg.output_freq/1e9:.4f} GHz  "
         f"bw={cfg.chirp_bw/1e6:.0f} MHz  "
         f"ramp={int(cfg.ramp_time_s*1e6)} µs  "
-        f"chirps={cfg.num_chirps}  "
-        f"spc={cfg.n_frame}  "
+        f"fs={cfg.sample_rate/1e6:.3f} MHz  "
+        f"chirps={cfg.num_chirps}  spc={cfg.n_frame}  "
         f"R_res={cfg.range_res_m:.3f} m  "
         f"v_res={cfg.vel_res_m_s:.3f} m/s  "
-        f"max_vel=±{cfg.max_vel_m_s:.1f} m/s"
+        f"max_vel=±{cfg.max_vel_m_s:.1f} m/s\n"
+        f"[sentinel_radar] 2m target: beat={beat_2m_hz/1e3:.1f} kHz  "
+        f"bin={bin_hz:.0f} Hz  sep={sep_bins:.1f} bins from leakage  "
+        f"({'GOOD' if sep_bins >= 5 else 'WARN: close-range masked — try --ramp 1200 --bw 500e6'})"
     )
 
     app = QApplication(sys.argv)
