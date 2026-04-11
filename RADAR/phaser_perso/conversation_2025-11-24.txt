@@ -1,0 +1,1173 @@
+Session log (2025-11-24)
+========================
+
+- Goal: Simplify CW radar UI to view IF in time/frequency, tune RF directly, and diagnose extra LO tone.
+- Code base: drafts/CW_IF_Scope.py derived from pyadi-iio/examples/phaser/PhaserRadarLabs/CW_RADAR_Waterfall.py.
+
+Timeline
+--------
+- Added time-domain IF view, audio envelope, and audio/Doppler FFT; enabled buffer saving.
+- Added GUI controls for signal tone, RF frequency, audio span, TX port; later simplified to direct RF entry (no LO math).
+- Set RF default to 10.2 GHz; constrained RF spinbox to 10.0–10.5 GHz; Pluto IF kept at 2.2 GHz; Phaser LO set to RF/4 internally by driver.
+- Noted LO leakage at ~12.4 GHz; explanation: LO feedthrough without output BPF. Suggested 10–10.5 GHz BPF or shielding to suppress.
+- Fixed NameError (Window indentation) and missing QDoubleSpinBox import; ensured py_compile passes.
+- Logged CN0566 frequency-plan notes in workspace/radar/cn0566_freq_plan.md (RF 10–10.5 GHz, LO 12.2–12.7 GHz if using LO-IF math; antenna/BPF centered ~10 GHz).
+
+Current file of record
+----------------------
+- drafts/CW_IF_Scope.py (RF set directly via UI; default 10.2 GHz).
+
+Outstanding
+-----------
+- If spectrum analyzer still sees LO spur, add external 10–10.5 GHz BPF or reduce leakage via hardware settings/port selection.***
+
+i have added a new directory under workspace called radar, within there is a script in workspace/radar/pyadi-iio/examples/phaser/PhaserRadarLabs called CW_radar_waterfall, , im using this steup descitbed in the context below, infornt of it i have a normal speaker sony big one thats geneating a sine at 157hz, this is where i see, i can see two harmoni frequencies, when i turn off the speaker only the central one remains, in the plot down blow, i expect to detect and compare movement, ( i can do that when i wave my hand or move refelctors infornt ot it0 but its not detecting the movement of the speaker, only thesw harmnoics appear, what could be the explanation?
+my objective is to detect this speaker frewuency as IF
+expore the whole radar directory, and look online to understand the setup im working with via these links, here is also the transciipt of a video im taking inspiration from:
+
+tactiq.io free youtube transcript
+No title found
+https://www.youtube.com/watch/5VSIIFKK6Ck
+00:00:00.000 No text
+00:00:00.799 hello everyone this is the second video
+00:00:02.240 in my Series where we are incrementally
+00:00:03.840 building up a drone tracking radar so in
+00:00:06.040 each video I'll bring up a new radar
+00:00:07.600 topic and then use real radar hardware
+00:00:09.679 and software to accomplish that
+00:00:11.080 principle each topic will build on the
+00:00:13.639 previous video's topic so that by the
+00:00:15.360 end of this video series it will all
+00:00:16.880 come together into this very classical
+00:00:18.880 range Doppler plot here I'm just
+00:00:20.519 tracking cars and bicycles but in the
+00:00:22.359 final video we'll be tracking the range
+00:00:23.760 and speed of a small drone last week we
+00:00:26.439 talked about four Hardware options to
+00:00:28.119 construct this radar if you haven't seen
+00:00:30.039 that video then I'd recommend you pause
+00:00:31.679 this video and start there but here's a
+00:00:33.719 recap of those four
+00:00:35.360 options so option one was the very novel
+00:00:37.879 M Canna I'll post the link so that you
+00:00:40.120 can check that one out and these prices
+00:00:41.840 are all just my best guess at what the
+00:00:43.320 components would cost and the prices are
+00:00:44.920 in US Dollars option two was the Pluto
+00:00:48.000 software defined radio this can do two
+00:00:50.039 channel transmit two channel receive but
+00:00:51.960 it's limited to about 30 MHz of
+00:00:54.079 instantaneous bandwidth option three
+00:00:56.840 added an external loo to facilitate
+00:00:58.800 stretch processing this gives us much
+00:01:00.719 greater bandwidth and the mixers allow
+00:01:02.640 us to operate at really Whatever
+00:01:04.319 frequency that we want and then finally
+00:01:07.000 option four was the phaser kit which
+00:01:08.840 combines all the features along with
+00:01:10.280 phase R beam forming this is the one
+00:01:11.759 that I'll be using in these videos but
+00:01:13.479 you can take all the stuff that we're
+00:01:14.560 going to do in this video series and
+00:01:16.200 apply it to any one of these other
+00:01:17.680 options just with varying degrees of
+00:01:19.479 performance and
+00:01:21.720 features and there are even other
+00:01:23.560 Hardware option choices too uh in the
+00:01:25.880 comments I've talked with people about
+00:01:27.079 using the hack rf1 which is a great SDR
+00:01:29.960 with the phaser though I can do all the
+00:01:31.680 things that I want to show in this video
+00:01:33.600 series as well as have some cool stuff
+00:01:35.600 to explore if people want to see more of
+00:01:37.320 these kinds of videos uh in the future
+00:01:39.840 but all the concepts and even much of
+00:01:41.439 the software that we're going to go
+00:01:42.520 through is very applicable to many
+00:01:44.040 different Hardware setups so in the last
+00:01:46.399 video we briefly discussed pulse versus
+00:01:48.479 CW radar I want to go a little deeper
+00:01:50.680 into both of those now everything in
+00:01:52.840 this series is going to be CW radar but
+00:01:55.600 to understand these Concepts I think it
+00:01:57.479 actually makes more sense to first start
+00:01:59.240 with pulse radar it'll allow me to
+00:02:01.280 introduce some key topics like the radar
+00:02:03.200 range equation and range resolution and
+00:02:05.759 I think it will naturally explain why
+00:02:07.360 we're doing the continuous wave radar
+00:02:09.679 implementation so we'll talk about pulse
+00:02:11.680 radar and then segue into how CW radar
+00:02:14.239 works and we'll calculate Doppler shifts
+00:02:16.519 and then we'll program the phaser as a
+00:02:17.959 simple CW radar and we'll see all that
+00:02:20.160 working and after we see it working I'll
+00:02:22.360 go over exactly what is happening in the
+00:02:24.360 Python program so we'll go over that in
+00:02:26.319 detail and spend some time on it and the
+00:02:28.360 software is really the key to build
+00:02:29.800 building a radar system nowadays
+00:02:31.800 choosing and assembling the hardware is
+00:02:33.480 not too too difficult it's really the
+00:02:35.920 software and the data processing that
+00:02:37.400 makes a radar or radar so that's the
+00:02:39.519 plan for this video um and let's start
+00:02:41.319 now by thinking a bit more about pulse
+00:02:43.879 radar so pulse radar works exactly as
+00:02:44.000 No text
+00:02:47.200 you would think that radar works when
+00:02:48.760 you think of a radar you're probably
+00:02:50.200 thinking of pulse radar in pulse radar
+00:02:52.440 systems you emit a pulse and then
+00:02:54.319 measure its return time then multiply
+00:02:56.640 that time by the speed of light and
+00:02:57.959 divide by two because you're measured
+00:03:00.000 the roundtrip time and that's how you
+00:03:01.720 get range and we can get the velocity of
+00:03:03.680 the Target by either looking at the
+00:03:05.159 change in range from pulse to pulse or
+00:03:07.879 we can measure the Doppler shift of the
+00:03:09.720 return pulse but that is primarily for
+00:03:11.599 very fast velocities and this all works
+00:03:14.159 great there is nothing wrong with it it
+00:03:15.879 is entirely perfect except for one
+00:03:18.319 crippling issue and the main issue with
+00:03:20.840 pulse radar is that it uses pulses and
+00:03:24.640 understand why this is a problem we need
+00:03:26.519 to talk a bit about the radar range
+00:03:28.680 equation this is a common version of the
+00:03:31.319 classical radar range equation and it
+00:03:33.519 applies to all radar types uh let's
+00:03:35.439 let's walk through it real quickly this
+00:03:37.360 equation is saying that the power we
+00:03:39.319 will get back from a Target is a
+00:03:41.080 function of the transmitted energy okay
+00:03:44.040 that that makes sense it's also a
+00:03:45.920 function of the gain of the receiveing
+00:03:47.760 transmit antennas basically how much of
+00:03:50.080 that energy we can put in the direction
+00:03:51.760 that we want and here we're assuming
+00:03:53.480 that the transmit antenna is the same as
+00:03:55.000 the receive antenna that's why it's g^
+00:03:57.480 s next the power we get back is is also
+00:04:00.159 a function of the wavelength squared of
+00:04:02.280 our carrier frequency so lower
+00:04:04.000 frequencies are larger wavelengths and
+00:04:05.840 so they will generally give us more
+00:04:07.319 radar range the radar cross-section is a
+00:04:10.079 model of how much energy we expect to
+00:04:12.200 get back from a Target uh and of course
+00:04:14.159 this varies wildly and then on the
+00:04:16.079 denominator of the equation you'll see
+00:04:17.680 that power diminishes with an R to the
+00:04:19.600 fourth loss so an R squ reduction
+00:04:21.759 getting to the Target and then another r
+00:04:23.720 s reduction coming back so is a whopping
+00:04:26.320 R to the 4th total reduction in power
+00:04:28.639 which is absolutely massive mive so when
+00:04:30.759 you look at this equation a lot of this
+00:04:32.759 is out of our control we'll make the
+00:04:34.160 antennas as good as we can the
+00:04:35.600 wavelength is generally dictated by
+00:04:37.120 other factors uh the cross-section is
+00:04:39.080 what it is so the two key points I want
+00:04:41.919 to make are number one the return power
+00:04:44.680 drops Like a Rock it's a 1/ r to the 4
+00:04:47.639 power relationship that is a huge issue
+00:04:49.960 for all Radars to overcome and then
+00:04:52.320 number two the only real knob that we
+00:04:54.680 have for that return power is to
+00:04:56.880 increase the transmit power and that is
+00:04:59.160 average power it is not Peak power so
+00:05:01.919 that's a problem when you're pulsing
+00:05:03.280 your transmit waveform but you might say
+00:05:05.880 well I it's okay I'll just do really
+00:05:08.080 long pulses then I'll get a lot of
+00:05:09.960 average power on a Target but the
+00:05:12.120 problem with really long pulses is range
+00:05:14.039 resolution so let's talk about that
+00:05:16.759 next so if you had two closely spaced
+00:05:18.000 No text
+00:05:19.400 objects like two cars that were only a
+00:05:21.000 few meters apart and you sented a long
+00:05:23.319 radar pulse then it's very likely that
+00:05:25.800 the radar pulse of the yellow car will
+00:05:27.639 overlap the radar pulse of the purple
+00:05:29.280 car
+00:05:30.280 is because with just a few meters of
+00:05:31.919 Separation The pulses will only be
+00:05:33.479 separated in time by a fraction of a
+00:05:35.919 microsc but if that transmit pulse was
+00:05:38.400 shorter like really short then you would
+00:05:41.000 be able to see a distinct return from
+00:05:42.680 the yellow car and a distinct return
+00:05:44.960 from the purple car so that's range
+00:05:46.919 resolution how close can two Targets be
+00:05:49.319 before we start seeing them as one big
+00:05:51.400 Target and of course there's an equation
+00:05:53.560 for range resolution and of course it is
+00:05:55.720 dependent on pulse width so the range
+00:05:57.680 resolution is equal to the pulse width
+00:05:59.240 time time the speed of light ID two and
+00:06:01.840 here's another point that I want to make
+00:06:02.960 right now the bandwidth of a pulse is
+00:06:05.319 equal to the reciprocal of its pulse
+00:06:07.280 width so we can rewrite range resolution
+00:06:10.240 in terms of bandwidth this equivalency
+00:06:12.560 doesn't really matter right now but this
+00:06:14.479 equation is going to be very important
+00:06:16.160 when we start talking about modulating
+00:06:17.960 transmit waveforms so short transmit
+00:06:20.680 pulses or high transmit bandwidth will
+00:06:22.960 give better range resolution let's try
+00:06:25.199 an example with either of these
+00:06:26.440 equations now so if we had a 1 microc
+00:06:29.240 pul with then we will get about 150 M of
+00:06:32.080 range resolution so if we wanted to see
+00:06:34.599 a 1.5 M difference between the cars we
+00:06:37.800 need a pulse width that is 100 times
+00:06:39.840 smaller so that pulse width needs to be
+00:06:42.120 less than 10 NCS and we can do that we
+00:06:44.880 can make a super short pulse but now our
+00:06:47.240 average transmit power is reduced so we
+00:06:49.560 need to increase the peak power so for
+00:06:52.039 fine range resolution we end up needing
+00:06:54.520 an enormous amount of power for an
+00:06:56.400 incredibly short amount of time it's
+00:06:58.319 just a really hard thing to do now keep
+00:07:00.240 in mind that I'm only talking about the
+00:07:01.599 unmodulated pulse radar case there are
+00:07:04.199 other waveform types that help with this
+00:07:06.000 using a technique called pulse
+00:07:07.199 compression but that will come up in in
+00:07:09.280 later videos so right now just consider
+00:07:11.759 a pulse sine wave no modulation to it
+00:07:14.840 and the kind of amplifiers used to
+00:07:16.240 transmit that kind of pulse sine wave
+00:07:18.280 are absolutely nutty they are not the
+00:07:20.280 kind of amplifiers that we are going to
+00:07:21.639 be using these things generate like 20
+00:07:24.280 kW Peak power pulses but at such a tiny
+00:07:27.160 pulse width that they are only about 20
+00:07:28.960 watts of average power or they generate
+00:07:31.319 like 10 megawatt pulses with a 100 watt
+00:07:34.520 average power so it's enormous Peak
+00:07:37.039 powers for super tiny amounts of time it
+00:07:39.840 means that a pulsed unmodulated radar is
+00:07:42.160 a very hard thing to do a demo for but I
+00:07:44.520 wanted to cover it because it explains a
+00:07:46.199 few of the reasons why continuous wave
+00:07:47.840 radar is so attractive so let's talk
+00:07:49.840 about that now continuous wave radar and
+00:07:52.000 No text
+00:07:52.520 a big part of radar and specifically CW
+00:07:54.840 radar is this idea of Doppler frequency
+00:07:56.960 so let's do a quick refresher on it now
+00:07:58.960 r waves as they bounce off a moving
+00:08:01.120 Target will shift in frequency so if an
+00:08:03.639 object is coming towards you it will
+00:08:05.280 shift higher in frequency if it's moving
+00:08:07.120 away from you it will shift lower in
+00:08:08.680 frequency and we usually don't care what
+00:08:10.599 the exact frequency is we only care what
+00:08:12.680 the beat frequency is the beat frequency
+00:08:14.680 is a difference between what you
+00:08:15.879 transmitted and what you received and
+00:08:18.080 that beat frequency is equal to 2 * the
+00:08:20.280 velocity of the target time the
+00:08:21.759 transmitter frequency divided by the
+00:08:23.280 speed of light so we can make our radar
+00:08:26.159 using this principle if we hit a target
+00:08:28.680 with a Contin sine wave at one frequency
+00:08:31.360 we will get back a small shift in that
+00:08:33.479 frequency that small shift is the beat
+00:08:36.039 frequency and so we can use that to
+00:08:37.919 measure a target's velocity but what
+00:08:40.519 about range with a single unmodulated
+00:08:43.279 sine wave we can't make any range
+00:08:44.959 measurements even so the CW radar is
+00:08:47.360 still useful because everything that is
+00:08:49.120 stationary relative to the radar will
+00:08:51.200 return the same frequency only things
+00:08:53.240 that are moving will return different
+00:08:54.959 frequencies so this gives us a great
+00:08:57.000 ground clutter suppression mechanism and
+00:08:59.480 it's often used for that purpose like
+00:09:01.240 for a police radar gun so let's go
+00:09:03.680 through an example of this now say a
+00:09:06.279 car's velocity is 100 mph headed
+00:09:08.600 straight at us that means that we would
+00:09:10.519 see a beat frequency of about 716 Hertz
+00:09:13.920 if we change the frequency to instead be
+00:09:15.920 10 GHz then that beat frequency would
+00:09:18.399 increase proportionally to about 3 khz
+00:09:21.200 so these are not huge shifts in
+00:09:22.800 frequency but even a small shift in
+00:09:24.880 frequency is very measurable over the
+00:09:26.600 last 100 years we've gotten very very
+00:09:28.480 good at measuring
+00:09:29.800 frequency so let's try that now with the
+00:09:31.959 phaser setup that we talked about last
+00:09:33.519 week here's what that setup will look
+00:09:35.600 like for measuring CW Doppler shift I
+00:09:38.240 want to say that I first saw the CW
+00:09:39.720 radar experiment done with a fan by a
+00:09:41.640 brilliant engineer named Luigi Cruz so
+00:09:44.200 I'll put a link to his YouTube video in
+00:09:45.839 here also he used the G radio program
+00:09:48.440 and a lime SDR to do his experiment for
+00:09:51.200 us we'll use the phaser board that we
+00:09:52.399 talked about in the last video and it's
+00:09:54.240 connected via Ethernet to my laptop and
+00:09:56.640 I'm transmitting a 10 GHz continuous
+00:09:58.640 sine wave that strikes a fan and then
+00:10:01.079 gets reflected to the receive array to
+00:10:03.240 simplify things we're not doing any beam
+00:10:04.760 forming on the receive side of the
+00:10:06.079 phaser board the array is just pointed
+00:10:08.000 straight ahead so that receive signal
+00:10:10.000 comes back into phaser We compare
+00:10:11.760 receive to transmit and we get the beat
+00:10:13.320 frequency you can find all the details
+00:10:14.760 on this lab as well as the program at
+00:10:16.519 the GitHub link shown let me show you
+00:10:18.079 how this works first and then we'll walk
+00:10:19.720 through the program and explain how to
+00:10:21.120 do it so I've got the phaser set up with
+00:10:22.000 No text
+00:10:23.440 a transmit antenna I'm controlling the
+00:10:25.600 fan speed with remote control the top
+00:10:28.160 plot is the inst instantaneous frequency
+00:10:30.200 spectrum and the bottom plot is that
+00:10:32.560 frequency spectrum plotted versus time
+00:10:34.720 where the colors indicate the magnitude
+00:10:36.720 of that frequency so there's a big
+00:10:38.760 yellow Spike at the center of that plot
+00:10:40.519 that's our transmit frequency and as the
+00:10:42.639 fan speed increases the return frequency
+00:10:45.160 moves away from that Center that's the
+00:10:47.000 aqua blue Trace that frequency deviation
+00:10:49.800 is the beat frequency so we can take
+00:10:51.680 that frequency deviation and use that to
+00:10:53.880 derive the fan speed the numbers might
+00:10:56.040 be a little bit hard to see but um at
+00:10:58.360 the most that frequency deviation is
+00:11:00.959 about 250 HZ it's a very simple radar
+00:11:05.079 very easy to do with just about any
+00:11:07.000 hardware let's look now at the software
+00:11:09.639 for how this is set up and programmed
+00:11:11.600 this is the Python program that I just
+00:11:12.000 No text
+00:11:13.240 ran to do that CW radar experiment with
+00:11:15.200 the fan the program is on the GitHub
+00:11:17.680 link that I just shared so you can take
+00:11:19.120 a look at it there it just starts with
+00:11:21.360 this standard legally boiler plate and
+00:11:24.720 then we come to these import commands so
+00:11:27.519 the key library is this ADI library that
+00:11:30.480 is the pi ADI IO library that has ADI
+00:11:33.519 data converters transceivers
+00:11:35.320 synthesizers and other software
+00:11:37.200 controllable Parts in it so this is the
+00:11:39.240 key library that will allow us to
+00:11:40.440 control all the phaser hardware and it's
+00:11:42.440 the same library that you would use if
+00:11:43.880 you did Hardware options two or three
+00:11:46.600 there's a video I did for this channel
+00:11:48.639 last year that showed how to use this
+00:11:50.320 library for Pluto I'll put the link in
+00:11:52.399 in this video's description and if
+00:11:54.360 you're new to Python and controlling ADI
+00:11:55.959 Hardware that might be the the best
+00:11:57.440 place to start with some of the
+00:11:59.760 then there's some other libraries that
+00:12:00.839 we also import pretty standard libraries
+00:12:03.600 a lot of them are just used like the pqt
+00:12:05.680 libraries are just used for for
+00:12:07.360 generating the guey which unfortunately
+00:12:09.399 is is a lot of this code so when we
+00:12:11.320 start getting into the the meat of
+00:12:12.560 things here there's two IP addresses one
+00:12:15.160 is the Raspberry Pi IP address and you
+00:12:18.240 know the Raspberry Pi has some IP
+00:12:19.480 address 192.168 something point
+00:12:21.880 something based on where it is in my
+00:12:23.079 local network but you can also assign it
+00:12:25.120 a name and so all of the phasers are
+00:12:27.959 called phaser and so if you just search
+00:12:30.279 for phaser dolal and you give it that IP
+00:12:32.440 address then then that will work when we
+00:12:34.440 instantiate that Raspberry Pi object and
+00:12:37.360 then the same thing for the SDR IP
+00:12:40.680 address this is Pluto's default address
+00:12:43.320 you could also use pluto. Loco but I
+00:12:45.120 find that using this
+00:12:58.959 on on your network and then we create
+00:13:00.920 the objects so there's two objects that
+00:13:02.360 we're going to create one is called my
+00:13:03.959 SDR this is this is Pluto and the other
+00:13:06.440 one is called my phaser and this is the
+00:13:08.920 phaser Hardware object that's going to
+00:13:10.600 have the Adar 1000 and the ADF 4159 so
+00:13:14.120 the next thing we're going to do is
+00:13:15.160 we're going to use that ADI library to
+00:13:17.440 configure the ADR 1000s so we put them
+00:13:20.360 in receive device mode because that is
+00:13:22.279 what that array is it's a receive only
+00:13:23.959 array and then when we load gain and
+00:13:25.920 phase Cals there's descriptions on how
+00:13:28.600 the calibration works if you go to wiki.
+00:13:31.199 analog.com phaser so there's some great
+00:13:33.639 examples and descriptions on what those
+00:13:35.880 are doing and how to program those then
+00:13:38.639 we're going to set the phase of the
+00:13:40.320 phasers eight channels and that phase is
+00:13:43.519 just going to be 0 degrees because we're
+00:13:44.959 just going to have that array Point
+00:13:46.079 straight ahead and then we're going to
+00:13:47.639 set the gain of the phaser eight
+00:13:49.440 channels and for this gain I'm using a
+00:13:51.440 Blackman taper that helps with some of
+00:13:53.759 the side loes so you can check out some
+00:13:55.320 of the other videos on that wiki. analog
+00:13:57.399 page and learn learn about gain tapering
+00:14:00.480 so we apply all of those gains to the
+00:14:02.360 phasers 8 antennas there's some other
+00:14:04.959 hardware switches that we need to set
+00:14:07.160 basically just to set some of the RF
+00:14:09.199 paths and the options on the phaser
+00:14:11.519 board so we do that here but let's not
+00:14:14.440 spend too much time thinking about those
+00:14:15.959 right now okay so some of the key
+00:14:17.839 parameters now the sample rate for Pluto
+00:14:21.279 is 600 khz so that's a low sample rate
+00:14:25.000 but you saw from the experiment that we
+00:14:26.600 just ran that we were only seeing about
+00:14:28.880 250 htz frequency deviation so 600 khz
+00:14:33.160 is plenty in order to see that kind of
+00:14:34.920 frequency deviation the center frequency
+00:14:38.040 this is Pluto's Lo frequency it's 2.2
+00:14:40.639 GHz this is basically the IF frequency
+00:14:43.399 in our signal chain so the receive and
+00:14:46.040 transmit loos's of Pluto are going to be
+00:14:48.199 set to 2.2 GHz the signal frequency is
+00:14:51.519 the information that we're actually
+00:14:52.880 sending for us this is just a sine wave
+00:14:55.680 but in other systems this might be some
+00:14:57.800 kind of a coded signal or frequency ramp
+00:15:00.120 or frequency chirp but we need to give
+00:15:01.839 it something we can't just send it 2.2
+00:15:04.199 GHz because on both the transmit and
+00:15:06.199 receive we try to suppress that carrier
+00:15:08.680 because ultimately all we want is the
+00:15:10.199 data that that carrier possesses so for
+00:15:12.639 our case that data is 100 khz num slices
+00:15:16.360 and fft slices is used to do the
+00:15:18.839 waterfall plot and now we're going to
+00:15:20.880 configure all the parameters for Pluto
+00:15:23.600 first the receive side and then the
+00:15:24.959 transmit side so we configure sample
+00:15:27.079 rate we configure the L frequency we say
+00:15:30.279 that we want two channels enabled we
+00:15:32.279 configure the gain and then on the
+00:15:34.560 transmit side we give it that same
+00:15:35.959 Center frequency we also enable two
+00:15:38.240 channels even though we're only using
+00:15:39.839 one of the channels so we set that other
+00:15:41.759 channel to maximum attenuation and the
+00:15:44.440 channel that we're using is channel one
+00:15:46.279 so we set that to zero DB of attenuation
+00:15:49.160 I'd mentioned in the last video that
+00:15:50.519 we're using the ADF 4159 ramping PLL and
+00:15:54.519 that combined with a vco allows us to
+00:15:57.040 generate frequency chps which we're
+00:15:58.360 going to talk about in the next video so
+00:16:00.480 we set the output frequency of the vco
+00:16:02.800 that is controlled by the ADF 4159 12.2
+00:16:06.319 GHz so 12.2 GHz minus the 2.2 GHz IF
+00:16:11.199 frequency that we just set for Pluto
+00:16:13.519 that's what gives us our 10 GHz output
+00:16:15.680 signal next we configure the data
+00:16:18.040 pattern to Output that 100 khz sine wave
+00:16:22.120 and that becomes this IQ Data here and
+00:16:25.560 finally we just send that data to Pluto
+00:16:28.199 with this this uh my sd. TX command now
+00:16:32.000 unfortunately a good chunk of this
+00:16:33.839 program is all of these gooey settings
+00:16:36.040 and it's kind of a necessary evil we
+00:16:38.079 kind of have to use pqt graph to do the
+00:16:40.160 waterfall plot because map plot lib is
+00:16:42.759 just very very slow at doing a waterfall
+00:16:44.519 plot so there's a big chunk of code in
+00:16:47.880 here that's just dedicated to the pqt
+00:16:50.399 GUI and it's unfortunate because it
+00:16:52.759 makes this whole script look a lot more
+00:16:55.519 complicated than it really is so I would
+00:16:58.519 just recommend ignoring that for now and
+00:17:01.519 if you really want to dig into it it's
+00:17:03.079 all there you can you can take a look at
+00:17:04.720 it it's not it's not hard to understand
+00:17:06.959 but there's just a lot of it so we
+00:17:09.119 scroll through all of that okay and then
+00:17:11.919 we get back into the good stuff so first
+00:17:14.039 we grab a buffer of data from Pluto and
+00:17:16.439 that buffer of data is actually going to
+00:17:18.119 return two columns one for receive one
+00:17:21.160 and one for receive two we're going to
+00:17:23.119 add those together since we're doing a
+00:17:24.559 phased array implementation there so we
+00:17:27.079 sum those together we apply a window to
+00:17:29.480 the data and then this code here is just
+00:17:31.919 calculating the dbfs of that data so
+00:17:35.880 what is the magnitude of the data
+00:17:37.880 represented in decb full scale and then
+00:17:40.320 we just update the graphs with that data
+00:17:42.440 and this repeats in an ongoing Loop it
+00:17:44.679 updates the top graph with the
+00:17:46.160 instantaneous fft plot and then the
+00:17:48.520 bottom graph waterfall plot like a strip
+00:17:50.640 chart recorder that's it that's the
+00:17:52.720 whole program I hope that wasn't too
+00:17:54.559 scary or complicated if this is your
+00:17:57.080 first time in python or your first time
+00:17:59.000 using Pluto and some of adi's products
+00:18:01.720 probably the other video I mentioned is
+00:18:03.320 a better place to start where you focus
+00:18:04.960 just on Pluto and some of these commands
+00:18:06.880 and it'll make more sense and then
+00:18:08.520 basically we're just adding a few more
+00:18:10.039 Commands to control the RF pieces on
+00:18:12.280 phaser in order to do this but this is a
+00:18:14.919 very simple implementation of a CW radar
+00:18:17.720 system okay so that was a very simple CW
+00:18:18.000 No text
+00:18:20.159 radar system with an unmodulated sine
+00:18:22.280 wave we can only get velocity and really
+00:18:24.520 that velocity has to be something
+00:18:25.919 significant but in the next video we'll
+00:18:27.799 look at adding frequency modulation into
+00:18:29.960 the system and that is when things
+00:18:32.080 really get interesting and that kind of
+00:18:34.240 transmit modulation is really the
+00:18:35.840 foundation for most modern radar systems
+00:18:38.320 so if that sounds interesting then be
+00:18:39.640 sure to subscribe and look for that
+00:18:41.039 video soon thanks for watching
+https://wiki.analog.com/resources/eval/user-guides/circuits-from-the-lab/cn0566/quickstart
+https://github.com/jonkraft/PhaserRadarLabs
+context:
+Analog.comEngineerZoneAnalogDialogueMy Analog Login Log In
+Analog Devices Wiki
+Wiki
+Resources and Tools
+Education Content
+Wiki Help
+Wiki Tools
+search wiki
+
+This version (29 Mar 2025 15:12) was approved by Jon Kraft.
+The Previously approved version (06 Jan 2025 18:28) is available.Diff
+Table of Contents
+EVAL-CN0566-RPIZ Quick Start Guide
+Unboxing / Setup Video
+Equipment Required
+Overview Photo
+SD card / Software Setup
+Assembling, Booting and Configuring the System
+Configuring the SD Card
+Software Quick Start
+Initial Calibration
+Appendix: Pluto Setup
+Appendix: Configuration Script Notes
+EVAL-CN0566-RPIZ Quick Start Guide
+CN0566 “Phaser” Quick Start Guide.
+
+This is the minimum amount of setup to get the phaser up and running.
+
+Unboxing / Setup Video
+
+Equipment Required
+Hardware
+EVAL-CN0566-RPIZ Board
+Raspberry Pi 4
+ADALM-Pluto
+5 V, 3 A, USB-C wall adapter
+HB100 microwave source
+5V benchtop supply or 3 AAA (or AA) cells for HB100 power
+Micro HDMI to HDMI cable (or suitable adapters)
+16GB or larger SD card
+Tripod
+One of the following:
+Ethernet cable and DHCP-enabled network with internet access
+Wireless network
+One of the following:
+USB keyboard and mouse, HDMI display (if running locally)
+Host computer with SSH client and / or VNC client.
+Software
+ADI Kuiper Linux image
+Other
+Wired or Wireless network connection, with access to the internet (for accessing update files from Github.)
+
+This is the step file for the HB100 holder, with a 1/4-20 thread for a standard camera mount. HB100s can vary from manufacturer to manufacturer, so please do a quick measurement on the one you have, and make any necessary adjustments to the step file.
+Alternatively, use one of the other mounting methods described in the quick-start video.
+HB100 Holder Step File
+
+Overview Photo
+
+Figure 2. EVAL-CN0566-RPIZ Circuit Evaluation Block assignment
+
+SD card / Software Setup
+In order for the Raspberry Pi to control the Phaser devices, you will need to write the ADI Kuiper Linux image to an SD card and configure it. The SD card that ships with the phaser kit MUST be updated with a new image. The Phaser software is tested with Kuiper Linux 2021_R2, which, in spite of the “2021” in the name, was released in Spring, 2023. While there are newer Kuiper Linux releases, this version is required to maintain compatibility with the current phaser software packages.
+
+Download the image from:
+
+2 April 2023 release (2021_r2)
+Actual file
+Checksum image_2023-04-02-ADI-Kuiper-full.zip: 0cdcf6e131318113a137cf54335b9614
+Checksum 2023-04-02-ADI-Kuiper-full.img: aeff476b577b45cc6ce6ce02403a57c2
+Complete instructions for how to write it to the SD card and how to configure an example system are provided at Analog Devices Kuiper Linux.
+Hints: The Kuiper Linux wiki pages give a few options, but the “official” Raspberry Pi imager is very straightforward:
+Raspberry Pi Imager
+
+Switch to ADI Kuiper Imager once it's stable and documented on the wiki.
+
+After writing the image, if a window pops up saying “this card needs to be formatted, would you like to format it now?”, the answer is NO. Eject the card and insert it into the Raspberry Pi's SD card slot.
+
+Assembling, Booting and Configuring the System
+
+Figure 3. Test Setup Functional Block Diagram
+
+Connect ADALM-Pluto's CENTER micro-USB port to Raspberry Pi via micro-USB to USB cable.
+CAREFULLY thread the tripod into the tripod mount. Please minmize stress on the tripod mount while plugging in cables and other operations, as it is screwed directly to the PC board.
+Verify that the SD card is properly inserted into the slot on the Raspberry Pi.
+EITHER:
+Connect an HDMI display, USB keyboard, and USB mouse to the Raspberry pi, OR
+For remote login, connect the Raspberry Pi's Ethernet jack to your wired network, or directly to a host computer's Ethernet jack
+Power up the setup through the type-C port of the CN0566. Do NOT connect a supply to the Raspberry Pi.
+Wait for Raspberry Pi to boot. (This may take a minute or two, as the filesystem is expanded on first boot.)
+After booting, if you are using a keyboard and local display open a terminal as seen on the taskbar. If you are logging in over the network connection, you can open a graphical desktop VNC session or command line SSH session to hostname analog.local
+Configuring the SD Card
+The easiest way to configure the SD card is by running a setup script. This does require a wired or wireless internet connection, but it is much easier than doing things manually. A wired connection is fairly straightforward if your network supports DHCP. If you need to use a wireless connection, you'll have to boot to the graphical desktop and connect manually.
+Once connected to a network, run the following commands (and take a look at the setup script if you're suspicious, and note that there may be some updates as newer versions of Kuiper Linux are released.) The script is commented if you want a detailed description of what it's doing.
+
+wget https://github.com/thorenscientific/rpi_setup_stuff/raw/main/phaser/phaser_sdcard_setup.sh
+sudo chmod +x phaser_sdcard_setup.sh
+./phaser_sdcard_setup.sh
+sudo reboot
+(Wait for the system to reboot)
+Note: After running the script, the hostname will be phaser.local
+If you are going to be running scripts and other software directly on the Raspberry Pi, it's a good idea set a few options using the Raspberry Pi configuration utility. This can be accessed from the Start Menu under Preferences, or by running:
+
+sudo raspi-config
+from the command line. Set the locale, keyboard, timezone, and wifi country (if you'll be connecting to your network by wifi.)
+
+You'll also need to downgrade the numpy version to fix a compatibility issue with our existing example python scripts:
+
+sudo pip install --force-reinstall numpy==1.22
+
+Software Quick Start
+At this point, the GUI can be run from the command line. Power up the HB100 source with either a 3V benchtop power supply or two AA cells and aim it a the phaser antenna. Run the following command to find the HB100 frequency:
+
+cd ~/pyadi-iio/examples/phaser
+python phaser_find_hb100.py
+Ideally, there should be a single, sharp peak as shown in the figure below.
+
+Figure 1. Find HB100 script
+
+If there is a single prominent peak, enter “y”. If there are several peaks or no visible peak, close the plot and enter 'n' at the prompt. Reposition the HB100 (and make sure there are no other sources nearby), then re-run the script.
+Next run the GUI:
+
+cd ~/pyadi-iio/examples/phaser
+python phaser_gui.py
+The GUI should load and begin displaying the beam pattern as shown below.
+Figure x. Phaser GUI
+
+Initial Calibration
+The phaser board is initially uncalibrated; each element will have a slightly different gain and slight phase error due to numerous factors. The phaser_examples.py script provides a calibration utility that will generate calibration files. Shut down the GUI if it is running. Place the HB100 directly in front of the array at mechanical boresight , approximately 1.5 m away. Then run:
+
+cd ~/pyadi-iio/examples/phaser
+python phaser_examples.py cal
+The script provides debug information and plots as it is running, you may have to close out of each plot for the script to proceed. After running this script, files gain_cal_val.pkl and phase_cal_val.pkl will be placed in the working directory. The GUI program will also load these files automatically when run again.
+
+Refer to CN0566 Calibration for additional details
+
+Appendix: Pluto Setup
+The Pluto that ships with the phaser kit has been pre-configured. In case something goes wrong, here is how to update the firmware and settings. For the CN0566, the TDD engine and additional control signals are required for some configurations, and were added as of Pluto firmware 0.38. The latest firmware is available from:
+
+plutosdr-fw/releases
+
+The next step is to update the Pluto configuration to enable the AD9361's second channel. Follow the directions at:
+Updating to the AD9364,
+For setting the mode of a Rev. C PlutoSDR to 2r2t, the following would be sequence of commands:
+
+fw_setenv attr_name compatible
+fw_setenv attr_val ad9361
+fw_setenv compatible ad9361
+fw_setenv mode 2r2t
+reboot
+Verify that the configuration was programmed properly by entering the following commands:
+
+fw_printenv attr_name
+fw_printenv attr_val
+fw_printenv compatible
+fw_printenv mode
+Wihich should return:
+
+fw_printenv attr_name
+attr_name=compatible
+
+fw_printenv attr_val
+attr_val=ad9361
+
+fw_printenv compatible
+compatible=ad9361
+
+fw_printenv mode
+mode=2r2t
+
+Appendix: Configuration Script Notes
+To manually edit config.txt, add the following:
+
+Phaser board overlay:
+dtoverlay=rpi-cn0566
+
+Heartbeat blinky:
+dtparam=act_led_gpio=26
+dtparam=act_led_trigger=heartbeat
+
+Short GPIO121 (pin 40) to ground for shutdown:
+dtoverlay=gpio-shutdown,gpio_pin=21,active_low=1,gpiopull=up
+If you will be logging in via VNC, see this article:
+RPi 4 4gb slow VNC
+Also if running “headless” without a monitor, set the HDMI group and mode accordingly:
+
+dtoverlay=vc4-kms-v3d
+uncomment to force a specific HDMI mode (this will force 1920x1080)
+hdmi_group=2
+hdmi_mode=82
+End of Document
+
+resources/eval/user-guides/circuits-from-the-lab/cn0566/quickstart.txt · Last modified: 29 Mar 2025 15:12 by Jon Kraft
+Page Tools
+﻿
+Legal and Risk
+Accessibility
+Privacy Policy
+Privacy Settings
+Cookie Settings
+沪ICP备09046653号-1
+©2025 Analog Devices, Inc. All Rights Reserved
+Analog.comEngineerZoneAnalogDialogueMy Analog Login Log In
+Analog Devices Wiki
+Wiki
+Resources and Tools
+Education Content
+Wiki Help
+Wiki Tools
+search wiki
+
+This version (07 Apr 2022 23:34) was approved by Mark Thoren.
+The Previously approved version (07 Apr 2022 23:32) is available.Diff
+Table of Contents
+CN0566 Software
+Configuration and Calibration files
+CLI example operation
+CN0566 Software
+There are several pieces of software used with the CN0566 Phaser, including a user-friendly Graphical User Interface (GUI) and a number of command-line utilities. These are located in the pyadi-iio examples folder. Assuming the pyadi-iio repository has been cloned to user analog's home directory, the path to the cn0566 examples is:
+
+analog@phaser:~/pyadi-iio/examples/cn0566 $
+Configuration and Calibration files
+There are several calibration and configuration files that the software uses. Calibration files are generated as described in CN0566 Calibration, and are as follows:
+
+hb100_freq_val.pkl - Measured frequency of microwave source
+gain_cal_val.pkl - Gain calibration coefficients
+phase_cal_val.pkl - Phase calibration offsets
+While these are intended to be generated once and re-used each time a program is run, they are easy to recreate as the physical surroundings change - microwave reflective surfaces, distance between the phaser array and source, changing between the onboard transmitter or independent microwave source, etc. If these files are deleted (or not present in the first place), default values will be used.
+
+The config.py file contains parameters for the operation of the phaser, including signal frequencies, sample rates, bandwidths, etc. This file can be edited directly, after which any software using it must be restarted.
+As a convenience for staying consistent with the Pyadi-iio Git repository, the config.py file can be copied to config_custom.py*. If present, software will use config_custom.py - this file can be edited without affecting the Git repository. ===== GUI operation ===== The GUI can be launched either from the command line or from the Thonny IDE. From the command line, run the following command: <code> python3 cn0566_gui.py </code> which will print debug information to the console as shown below. In this case, gain and phase calibration files were not present, but a frequency measurement file for an HB100 was found.
+Typical console output:**
+
+analog@phaser:~/pyadi-iio/examples/cn0566 $ python3 cn0566_gui.py
+file not found, loading default (all gain at maximum)
+file not found, loading default (no phase shift)
+Gain cal: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+Phase cal: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+Didn't find custom config, looking for default.
+Found signal freq file, 10495859375.0
+Running on Linux, connecting to ip:localhost and ip:192.168.2.1
+The GUI will launch and display an FFT of the incoming signal, with the beam set to maximum gain, steering angle of zero.
+
+Figure 1. GUI overview (FFT plot)
+
+If no signal is present, this indicates that the frequency is not set properly, or if you are using an antenna connected to J1, the “Transmit Disabled” is selected. If using an HB100, run the cn0566_find_hb100.py script again.
+
+Switch to the Rectangular Plot and select “Enable All” in the drop-down menu. An uncalibrated beam pattern will be displayed, which typically appears as a distorted SINC1 pattern.
+
+Figure 2. Uncalibrated Beam Pattern
+
+Close the GUI, Run the calibration routine to generate calibration files:
+
+python3 cn0566_examples.py cal
+Then re-start the GUI. The beam should be much closer to ideal, with first side lobes approximately 13dB below the main lobe.
+
+Figure 3. Beam Pattern After Calibration
+
+Much more detail on each control panel, walk through each experiment.
+
+CLI example operation
+A command line example is also provided. The main purpose for this script is to provide a template for developing additional custom programs (CLI, GUI, or other), as well as interacting directly with the CN0566 from the Python console. Run:
+
+python3 cn0566_examples.py
+The script will continuously take beam pattern measurements, and plot a representative time-domain and frequency-domain plot at mechnical boresight. This is shown in Figure 2.
+
+Figure 2. CLI plots
+
+Detail on CL options, interactive operation from the Python console, calibration, etc.
+
+resources/eval/user-guides/circuits-from-the-lab/cn0566/software.txt · Last modified: 07 Apr 2022 23:34 by Mark Thoren
+Page Tools
+﻿
+Legal and Risk
+Accessibility
+Privacy Policy
+Privacy Settings
+Cookie Settings
+沪ICP备09046653号-1
+©2025 Analog Devices, Inc. All Rights Reserved
+
+
+User attachment
+Why you see two sidebands, not a shifted 157 Hz line
+
+The speaker cone oscillates about a fixed point (zero-mean velocity), so CW radar sees phase modulation, not a steady Doppler offset. That produces symmetric micro‑Doppler sidebands ±nf_audio around the carrier, while the carrier at 100 kHz stays put.(sound-au.com)
+The Doppler shift magnitude is set by velocity, not the audio tone itself: (f_D = 2v/\lambda). A 1 mm peak displacement at 157 Hz gives (v_{pk}\approx1 m/s) → (f_D\approx67 Hz), so you’d expect first-order sidebands tens of hertz wide, not a 157 Hz IF line. Larger shifts need millimetre‑scale strokes and clean line‑of‑sight.
+Because the cone displacement is a small fraction of the 3 cm wavelength, the phase modulation index is tiny, so first sidebands are ~20–30 dB below the strong Tx‑Rx leakage and static clutter, leaving the bright central line.
+Why hand-waving “works” but the speaker doesn’t
+
+A moving hand changes range by centimetres, giving larger (f_D) and higher modulation index → stronger sidebands that clear the leakage floor.
+The cone may be partially shadowed by the grille/box; most energy you illuminate is still the stationary baffle, so clutter dominates.
+Practical tweaks to make the speaker motion pop out
+
+Increase RCS of the moving part: remove grille, tape a bit of foil on the cone dust cap, aim the array normal to its motion.
+Suppress direct leakage/clutter: add absorber between Tx/Rx, separate antennas, or lower Tx gain on the unused channel; then digitally notch DC by subtracting a running average of the IQ before the FFT.
+Look at phase, not just magnitude: form (z[n]=r[n]\cdot\text{conj}(tx[n])), unwrap phase, differentiate → audio-rate Doppler trace; or run a narrowband IQ high-pass (<30 Hz) to pull out the 157 Hz modulation.
+Boost SNR: raise Rx gain (or move closer) until sidebands rise above –50 dBFS but avoid clipping.
+If you need range gating, switch to the FMCW example and window on the range bin that contains the speaker to reject room clutter.
+Natural next step: implement the simple clutter‑subtraction + phase‑demod path in CW_RADAR_Waterfall.py and re-run with the foil on the cone; the 157 Hz tone should appear as a clean audio line.
+
+next lets make a new script in the dafts directy inspired by this script, my objective is to capture this IF signal in time domain and frequnecy domain and visualize it too, maybe you can add this next to the existing plots
+
+
+Added drafts/CW_IF_Scope.py: CW radar IF “scope” that keeps the existing FFT + waterfall and adds time‑domain IQ plot, audio-envelope trace (rough 20 Hz HP), and a “Save latest buffer (.npz)” button.
+Hardware params mirror the original CW demo (0.6 MS/s, 2.2 GHz IF, 100 kHz tone, Blackman taper, on-board LO), so you can swap scripts without re-tuning.
+Run: python3 drafts/CW_IF_Scope.py (launches full-screen PyQt graph). Snapshots save as if_snapshot_YYYYMMDD_HHMMSS.npz in the working directory.
+
+Tests: not run. Next: adjust signal_freq, RX gains, or the audio HP window (4000 taps) if you want deeper low-frequency rejection.
+
+you did a great job, this is waht i see now at 226hz the top right plot seems to not change much despite what i do
+
+
+User attachment
+Updated drafts/CW_IF_Scope.py so the top-right plot now shows the actual demodulated IF in time:
+
+Mixes the received IQ down by signal_freq and decimates to 20 kS/s for readability.
+Time plot now uses that baseband (I/Q) with auto-scaled Y-range and a 120 ms window, so Doppler/audio motion should visibly change the trace.
+Audio envelope now runs on the baseband magnitude with a ~40 ms smoothing HPF for cleaner low-frequency rejection.
+Run the same command: python3 drafts/CW_IF_Scope.py. The right-hand plots should now move when the 226 Hz source changes; if not, tweak bb_decim or the smoothing taps (commented) to trade time resolution vs. noise.
+
+never mind it made it worse now its always one line and the plot under it no longer works
+
+
+Made the time/audio views dynamic again.
+
+Key changes in drafts/CW_IF_Scope.py:
+
+Mix to baseband and decimate lightly (bb_decim = 6, ~100 kS/s) to keep motion visible without over‑smoothing.
+Time plot shows only the decimated baseband window (~80 ms) and auto-scales its Y range from the live data.
+Audio envelope now runs on that same baseband slice with a ~40 ms smoothing HPF; it should pulse with your 226 Hz source instead of a flat line.
+Run: python3 drafts/CW_IF_Scope.py.
+
+If the time/audio plots are still flat, try:
+
+Set bb_decim = 1 to remove decimation and compare.
+Verify signal_freq matches your TX tone (default 100e3); set it to the actual IF you’re transmitting.
+Bump RX gains or reduce leakage (attenuate TX0, move antennas apart) so the moving part isn’t buried under DC.
+now others work but the top right is alwasy doing this randmoly
+
+
+User attachment
+Time trace should now stay anchored instead of jumping:
+
+Disabled auto-ranging on the time plot and force its X-range to the fixed window each update.
+Kept the decimated baseband slice length constant and reapply both X and Y ranges every frame.
+No other behavior changed (FFT/waterfall/audio remain the same).
+Run again: python3 drafts/CW_IF_Scope.py. If the trace still drifts, drop bb_decim to 1–2 to shorten the window and reduce phase wrap.
+
+okay now it works great, run me through how it works, what the variables do, and what im seeing and the reasoining behind it, what to chose the trasnmit frequnecy as, why cant i detect below 50 hz etc
+
+
+Here’s what the script is doing and what each plot/variable means:
+
+Core signal flow
+
+Pluto Tx generates a single complex tone at signal_freq (default 100 kHz) around an IF/LO of center_freq = 2.2 GHz. The Phaser LO (output_freq/4) upconverts that to ~10 GHz RF.
+The scene reflection is received by the Phaser array, mixed to 2.2 GHz in Pluto Rx, and digitized at sample_rate = 0.6 MS/s.
+In software we synthesize the same 100 kHz tone and feed Pluto Tx (iq), then read Rx in blocks of fft_size samples (1024*64).
+For display:
+FFT / waterfall use the raw Rx block.
+Time + audio plots first mix the block down by exp(-j2π·signal_freq·n/fs) to baseband and decimate by bb_decim (6 → view_fs ≈100 kS/s) to make motion visible in time.
+Key parameters
+
+signal_freq: the CW baseband tone you transmit. Sets where the Doppler sidebands appear in FFT (at ±f_D around this tone). Keep it comfortably inside the 0.6 MS/s Nyquist band; 50–150 kHz is safe.
+center_freq: Pluto LO (2.2 GHz). Combined with Phaser LO gives RF = (output_freq – center_freq) ≈ 10 GHz.
+sample_rate: 0.6 MS/s. Higher gives wider Doppler span but heavier CPU; lower eases load but shrinks spectrum.
+fft_size: 65536. Large for fine frequency resolution (~9 Hz bins at 0.6 MS/s).
+bb_decim: 6. Decimation used only for time/audio plots; lower = more detail but more noise, higher = smoother but slower.
+Gain taper: gain_list Blackman across 8 RX elements to reduce sidelobes.
+GUI sliders: waterfall color scale (low/high dBFS).
+What each plot shows
+
+FFT (top-left): Magnitude spectrum of the current raw Rx block. The tall middle spike is Tx/Rx leakage + static clutter at 100 kHz; Doppler sidebands from motion appear symmetrically around it.
+Waterfall (bottom-left): History of spectra. Stationary clutter stays as a horizontal yellow band; moving targets trace slanted lines.
+Time trace (top-right): Baseband I/Q after mixing out 100 kHz and decimating. Should show a near-DC (slowly varying) complex signal; motion modulates its phase/amplitude.
+Audio envelope (bottom-right): |I+jQ| after a ~8 Hz high-pass (40 ms smoother). This highlights faster variations (tremor, fan blades, speaker cone vibrato).
+Choosing transmit frequency
+
+Pick signal_freq away from DC to avoid DC offsets/1/f noise and away from the band edges to leave room for Doppler. 80–120 kHz is a good default at 0.6 MS/s. If you raise sample_rate, you can also raise signal_freq proportionally.
+Why you can’t see < ~50 Hz Doppler right now
+
+The audio plot intentionally high-passes at ~8 Hz; that part is fine for <50 Hz.
+The real limit is SNR vs. leakage: very slow Doppler (tens of Hz) means very small frequency/phase deviation. If leakage/clutter dominates, the sidebands are buried. Mitigations: increase Rx gain, add absorber/antenna separation, or notch the carrier (subtract average IQ) before plotting.
+If you truly need sub-10 Hz motion, lower signal_freq isn’t required; instead improve clutter suppression and maybe lower bb_decim to 1–2 and increase smoother taps so the time plot shows slow phase drift without being swamped by noise.
+If you want finer slow-motion visibility
+
+Set bb_decim = 2 and taps = int(0.2 * view_fs) (~200 ms) for deeper low-frequency envelope.
+Add a running IQ mean subtraction before FFT/time plots to notch the carrier leakage.
+Raise Rx gains slightly (e.g., 40 dB) if headroom remains.
+does our code capture the IF in time domain ?
+
+
+Yes. In update() we grab each RX buffer, mix it down from the 100 kHz IF to baseband, and plot the resulting time sequence:
+
+data = my_sdr.rx()
+n = np.arange(len(data))
+bb = data * np.exp(-1j * 2 * np.pi * signal_freq * n / fs)  # IF → baseband
+bb = bb[::bb_decim]                                        # decimate for viewing
+The top‑right “Baseband Time Trace” shows that complex time-domain IF (after mixing and decimation). If you want to see the raw 100 kHz IF without mixing, we can add another plot that uses data directly instead of bb.
+
+yes lets add that
+
+
+Added a raw IF scope alongside the existing views.
+
+What changed:
+
+Defined a short 5 ms raw-IF window (if_view_len, time_axis_if).
+New “Raw IF Trace” plot (I=yellow, Q=cyan) sits below the baseband time plot.
+In update(), we now slice the first 5 ms of the un-mixed RX buffer and plot it with auto-scaled Y.
+Run as before: python3 drafts/CW_IF_Scope.py. Now you can see both the unmixed 100 kHz IF waveform and the demodulated baseband motion simultaneously.
+
+great, is there any other plot thats useful to add so that our experiment is more indicative
+
+
+Here are two additions that would make your CW experiment more telling without cluttering the UI:
+
+Audio/Doppler FFT (0–500 Hz)
+Purpose: immediately shows your 157/226 Hz speaker line (or hand‑wave Doppler) even if it’s buried under leakage in the RF FFT.
+How: take bb_view (already mixed and decimated), run an rFFT, plot magnitude in dB vs frequency (0–500 Hz). Update every frame.
+UI spot: under the existing Audio Envelope plot.
+IQ Constellation (baseband)
+Purpose: shows phase wobble directly; stationary clutter sits at a point, vibrating speaker draws a small circle/ellipse proportional to motion.
+How: scatter plot of bb_view (decimated) with modest down‑sample (e.g., every 10th point). Auto-scale axes to ±peak.
+If you want me to add one now, I’d start with the Audio/Doppler FFT—fast to read and directly answers “is my 226 Hz there?”. Just say the word and I’ll patch it in.
+
+lets add the audioo doppler ffr
+
+
+Added the requested Audio/Doppler FFT:
+
+New plot “Audio/Doppler FFT (baseband)” under the audio envelope. It rFFT’s the mixed/decimated baseband (bb_view) with a Hann window, shows 0–500 Hz by default, using audio_fft_len=4096.
+No other behavior changed.
+Run as usual: python3 drafts/CW_IF_Scope.py. You should now see the speaker’s 157/226 Hz line directly, even when buried in RF leakage. Adjust audio_plot_max_hz if you need a wider audio band.
+
+the newly added plot seems to be moving ramdomly, also it should be under the waterfall to itilize the UI space more cleanly
+
+
+User attachment
+Repositioned and stabilized the Audio/Doppler FFT:
+
+Moved the Audio/Doppler FFT plot under the waterfall (grid row 20, col 2) to clean up the layout. Baseband time/IF/audio stay on the right.
+FFT now subtracts DC, uses a Hann window, normalizes the peak to 0 dB, and displays –80 to 0 dB to reduce “random” wandering from leakage level changes.
+Compile check passed.
+Run: python3 drafts/CW_IF_Scope.py. The green curve should now sit stably, and the plots fit more cleanly.
+
+final touch is it possible to have our variable and various settings be controlable through the gui too since we have space on the left, so we view the various current settings and be able to change them on the fly
+
+
+User attachment
+Added a small control panel on the left:
+
+Signal frequency spinbox (10–250 kHz) + Apply button; rebuilds the TX tone, retunes the baseband mix, and recenters FFT/waterfall.
+Audio span spinbox (50 Hz–Nyquist) to change the Audio/Doppler FFT x‑range on the fly.
+Labels update to show current values.
+Run the same: python3 drafts/CW_IF_Scope.py. Use the spinboxes then click “Apply settings” to retune without restarting. Let me know if you want RX gains or decimation exposed next.
+
+what does HP stand for in our script
+
+
+“HP” in the plot title stands for “high‑pass.” The audio envelope graph shows |IQ| after a simple high‑pass operation (we subtract a short moving average) to remove DC/very-slow drift and highlight faster motion components.
+
+
+User attachment
+I forgot to import QDoubleSpinBox, which caused the NameError. Added it to the PyQt5 imports and the script now compiles cleanly.
+
+Run again: python3 drafts/CW_IF_Scope.py.
+
+read the code again, you can see that i fixed things because you were sending with the TX at 12ghz, but our whole system works from 10 to 10.5 ghz, if you need, do more research online and understand more the technicalities before we proceed. save waht u find in an md file so that you can refer to it
+
+
+Captured the CN0566 frequency-plan details and saved them to workspace/radar/cn0566_freq_plan.md for reference. Key points:
+
+Antenna + filters are clean from ~10.0–10.5 GHz; LO (ADF4159 + HMC735) spans 10.5–12.7 GHz.
+The labs use high‑side mixing: RF = LO − IF, with IF ≈ 2.2 GHz (Pluto). So for RF 10.0–10.5 GHz, set output_freq ≈ 12.2–12.7 GHz.
+Script reminder: output_freq is the LO before the driver’s /4, so set it directly to the LO value; keep center_freq near 2.2 GHz.
+If you want, I can now adjust drafts/CW_IF_Scope.py so the GUI enforces the 12.2–12.7 GHz LO range (for 10–10.5 GHz RF) and pre-fills a 10.3 GHz default.
+
+1 file changed
+
+Undo
+
+View all changes
+cn0566_freq_plan.md
++28
+-0
+
+yes go ahead, and fix anything else and review all desicions
+
+
+Updated the scope to respect the 10–10.5 GHz band and added LO controls:
+
+Default LO set to 12.25 GHz (≈10.05 GHz RF). Added allowed LO range 12.2–12.7 GHz.
+New GUI control: LO spinbox (GHz) with live RF readout (RF ≈ LO – 2.2 GHz) and Apply button updates the Phaser LO immediately.
+Restored/apply_settings now also handles LO, signal tone, and audio span together.
+Recompiled: no errors.
+Run: python3 drafts/CW_IF_Scope.py, then adjust LO in the left panel to stay within 12.2–12.7 GHz (RF 10–10.5 GHz).
+
+1 file changed
+
+Undo
+
+View all changes
+CW_IF_Scope.py
++72
+-1
+
+
+User attachment
+The crash you’re seeing is from the copy in ~/pyadi-iio/examples/phaser/CW_IF_Scope2.py, which still lacks QDoubleSpinBox in its imports. The drafts/CW_IF_Scope.py we just fixed already imports it.
+
+Quick fix for the file you’re running:
+
+At the top of CW_IF_Scope2.py, extend the PyQt5 imports to include QDoubleSpinBox:
+from PyQt5.QtWidgets import (QApplication, QLabel, QGridLayout, QPushButton,
+                             QSlider, QWidget, QMainWindow, QDoubleSpinBox)
+Save and rerun: python3 CW_IF_Scope2.py
+If you want all the recent LO-range and control-panel fixes, copy drafts/CW_IF_Scope.py over to your run location:
+
+cp /mnt/e/work/agent/drafts/CW_IF_Scope.py ~/pyadi-iio/examples/phaser/
+python3 ~/pyadi-iio/examples/phaser/CW_IF_Scope.py
+That will:
+
+Constrain LO to 12.2–12.7 GHz (RF 10.0–10.5 GHz).
+Let you retune signal tone, LO, and audio span from the left panel.
+Keep the added audio Doppler FFT and raw IF view.
+when i ise a specuterum analuyzer with an atenna infornt of the tranmsit, its actually tranmsitint at 12.2, which is wrong, it should be transmiting at seonehere between 10 and 10.5
+
+
+Changes made to align RF with 10–10.5 GHz and add on-the-fly control:
+
+LO defaults to 12.25 GHz (≈10.05 GHz RF) and constrained to 12.2–12.7 GHz (RF 10.0–10.5 GHz).
+Fixed baseband time axis scaling.
+Added GUI controls: signal tone, audio span, LO spinbox with live RF readout, and a TX port selector (OUT2/OUT1). Apply button now updates tone, LO, audio span, and TX port switch.
+Verified compile.
+If you still see 12.2 GHz on the spectrum analyzer:
+
+That is the LO. The mixed RF is at LO − IF (~10 GHz). Use the new TX port selector if your antenna is on OUT1, and measure around 10–10.5 GHz.
+1 file changed
+
+Undo
+
+View all changes
+CW_IF_Scope.py
++18
+-2
+
+your whole lo calculation thing is wrong, why all that, i just want to directly pick which frequency i output at and thats it, in this case i want to output at 10.2 ghz, keep things simple, review and remove any unnesecary compliications
+
+
+Simplified to “pick RF, we set the LO”:
+
+RF is now set directly (rf_freq spinbox, 10–10.5 GHz). LO is computed internally as RF + 2.2 GHz and pushed to the Phaser; no extra LO math exposed.
+Defaults: RF=10.2 GHz → LO=12.4 GHz.
+UI label now shows “RF (GHz) / LO=…”.
+Fixed baseband time axis (uses real time, not a large constant).
+Kept TX port selector if you need OUT1 vs OUT2.
+Run: python3 drafts/CW_IF_Scope.py, set RF to 10.2 GHz, click Apply. The analyzer should now show a carrier around 10.2 GHz (not 12.2).
+
+1 file changed
+
+Undo
+
+View all changes
+CW_IF_Scope.py
++18
+-17
+
+
+User attachment
+Fixed the NameError and kept the simple “pick RF” flow:
+
+Moved win = Window() and index = 0 out of the class block (they were indented), eliminating the self-referential Window NameError.
+Default RF stays 10.2 GHz; LO is computed as RF + 2.2 GHz automatically.
+Path: drafts/CW_IF_Scope.py (compiles cleanly now). Copy this file over your run location (~/pyadi-iio/examples/phaser/) and run:
+
+cp /mnt/e/work/agent/drafts/CW_IF_Scope.py ~/pyadi-iio/examples/phaser/
+python3 ~/pyadi-iio/examples/phaser/CW_IF_Scope.py
+Set RF directly in the left panel (10.0–10.5 GHz), click Apply; the emitted carrier should be at that RF.
+
+1 file changed
+
+Undo
+
+View all changes
+CW_IF_Scope.py
++1
+-1
+
+the spectrum analyzer is still seeing two peaks when pointed at the system, at 10.2ghz and at 12.4ghz, i dont think there should be the 12.4 one at all, whats the explanation behind that ?
+
+
+You’re seeing the LO leaking. The Phaser generates LO ≈ 12.4 GHz and mixes it down to 10.2 GHz (LO – IF). Imperfect isolation means some LO energy escapes the VCO/PLL path and reaches the antenna—either directly through the on‑board RF switch network, the LO_OUT routing, or PCB/connector coupling. Typical mixer/PA isolation is only a few tens of dB, so with no band‑pass filter you’ll see both:
+
+10.2 GHz: desired RF (LO – 2.2 GHz IF).
+12.4 GHz: LO feedthrough/harmonic spur.
+How to suppress the 12.4 GHz peak:
+
+Put a 10–10.5 GHz band‑pass filter on the TX port (best fix).
+Verify GPIO settings keep LO_OUT disabled (you can set gpio_vctrl_2 = 1 already; if available, ensure no LO_OUT path is selected).
+Increase TX atten / lower drive to reduce absolute leakage level.
+Separate TX/RX or aim the analyzer at the antenna through a band‑limited horn/waveguide.
+If using OUT1 vs OUT2, try the other port—layout differences can change leakage a few dB.
+The second peak is expected without output filtering; filtering or shielding is needed to make it disappear.
+
+i think the issue is from the code, because in our previosu codes, when i manually put the output frequency as 10.2ghz, there was only that, the way you are calculating the output is wrong and over engineerd, refence this file that we inspired everything from to understand again in @workspace/radar/pyadi-iio/examples/phaser/PhaserRadarLabs/CW_radar_waterfall.py
+
+
+I removed the over‑engineering and let you set the RF directly:
+
+output_freq is now the desired RF (default 10.2 GHz); no IF math applied.
+Limits: 10.0–10.5 GHz; the spinbox sets RF directly, label shows “RF out (GHz)”.
+LO written to the Phaser is simply output_freq/4 as in the original reference script.
+Fixed the baseband time axis comment.
+Re-run after copying this file over your runtime location:
