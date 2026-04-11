@@ -74,16 +74,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     t = p.add_argument_group("radar tuning")
     t.add_argument("--bw", type=float, default=500e6, metavar="Hz",
                    help="Chirp bandwidth")
-    t.add_argument("--ramp-time-us", type=int, default=300, metavar="us",
+    t.add_argument("--ramp-time-us", type=int, default=500, metavar="us",
                    help="Ramp time in microseconds")
     t.add_argument("--num-chirps", type=int, default=128,
-                   help="Chirps per frame")
+                   help="Chirps per frame. 128 = 64 ms/frame (~15 FPS real-time feel. "
+                        "Use 256 for recording/offline analysis (128 ms/frame, +3 dB SNR))")
     t.add_argument("--sample-rate", type=float, default=4e6, metavar="Hz",
                    help="ADC sample rate")
     t.add_argument("--rx-gain", type=int, default=70,
                    help="RX gain dB (-3 to 70)")
-    t.add_argument("--tx-gain", type=int, default=-10,
-                   help="TX gain dB (0 to -88; 0 = max)")
+    t.add_argument("--tx-gain", type=int, default=0,
+                   help="TX gain dB (0 to -88; 0 = max power)")
     t.add_argument("--output-freq", type=float, default=10.25e9, metavar="Hz",
                    help="RF output frequency")
     t.add_argument("--center-freq", type=float, default=2.1e9, metavar="Hz",
@@ -103,9 +104,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     d = p.add_argument_group("DSP")
     mti_grp = d.add_mutually_exclusive_group()
     mti_grp.add_argument("--mti", dest="mti", action="store_true", default=True,
-                         help="Enable 2-pulse MTI filter (default on)")
+                         help="Enable 2-pulse MTI filter (default on). "
+                              "NOTE: MTI suppresses zero-velocity targets -- "
+                              "use --no-mti when testing with a stationary reflector")
     mti_grp.add_argument("--no-mti", dest="mti", action="store_false",
-                         help="Disable MTI")
+                         help="Disable MTI (required to see stationary targets)")
+    win_grp = d.add_mutually_exclusive_group()
+    win_grp.add_argument("--window", dest="window", action="store_true", default=True,
+                         help="2D Hanning window before FFT (default on; -32 dB sidelobes)")
+    win_grp.add_argument("--no-window", dest="window", action="store_false",
+                         help="Disable 2D windowing (-13 dB rectangular sidelobes)")
     gate_grp = d.add_mutually_exclusive_group()
     gate_grp.add_argument("--range-bin", type=int, default=None, metavar="BIN",
                           help="Fix range gate by FFT bin")
@@ -172,6 +180,12 @@ class _LiveDisplay:
 
     def __init__(self, cfg, args) -> None:
         import matplotlib
+        # TkAgg is the fastest interactive backend on Linux.
+        # Must be called before pyplot import; ignore if already set.
+        try:
+            matplotlib.use("TkAgg")
+        except Exception:
+            pass
         import matplotlib.pyplot as plt
 
         self._plt = plt
@@ -187,7 +201,8 @@ class _LiveDisplay:
             f"BW={cfg.chirp_bw/1e6:.0f}MHz  "
             f"ramp={int(cfg.ramp_time_s*1e6)}us  "
             f"chirps={cfg.num_chirps}  "
-            f"MTI={'on' if args.mti else 'off'}",
+            f"MTI={'on' if args.mti else 'off'}  "
+            f"win={'on' if args.window else 'off'}",
             fontsize=12,
         )
 
@@ -203,9 +218,12 @@ class _LiveDisplay:
             from matplotlib.cm import get_cmap
             cmap_rd = get_cmap("inferno")
 
+        # No vmin/vmax: let matplotlib auto-scale on the first frame.
+        # Per-frame set_clim() in update() then locks dynamic contrast on
+        # every frame, matching the behaviour of the reference scripts.
         self._img_rd = ax_rd.imshow(
             dummy_rd, aspect="auto", extent=rd_extent, origin="lower",
-            cmap=cmap_rd, vmin=args.min_scale, vmax=args.max_scale,
+            cmap=cmap_rd,
         )
         ax_rd.set_title("Range-Doppler Spectrum", fontsize=14)
         ax_rd.set_xlabel("Velocity [m/s]", fontsize=12)
@@ -228,7 +246,7 @@ class _LiveDisplay:
 
         self._img_md = ax_md.imshow(
             dummy_md, aspect="auto", extent=md_extent, origin="lower",
-            cmap=cmap_md, vmin=args.min_scale, vmax=args.max_scale,
+            cmap=cmap_md,
         )
         ax_md.set_title("Micro-Doppler History", fontsize=14)
         ax_md.set_xlabel("Frame index", fontsize=12)
@@ -252,7 +270,15 @@ class _LiveDisplay:
         self._dist = dist
 
     def update(self, result: dict, history_data: np.ndarray, frame_idx: int) -> None:
-        self._img_rd.set_data(result["rd_map"])
+        rd = result["rd_map"]
+        self._img_rd.set_data(rd)
+        # Per-frame dynamic normalization: 2nd–99.5th percentile.
+        # This adapts to the actual signal level each frame and gives the same
+        # high-contrast look as the reference scripts (which also auto-scale).
+        lo, hi = np.percentile(rd, [2.0, 99.5])
+        if hi > lo:
+            self._img_rd.set_clim(lo, hi)
+
         # show the selected range gate as a horizontal line
         range_m = (
             float(result["range_m"])
@@ -261,13 +287,21 @@ class _LiveDisplay:
         )
         self._range_bin_line.set_ydata([range_m, range_m])
         # micro-Doppler history: shape (history_len, doppler_bins) -> display as .T
-        self._img_md.set_data(history_data.T)
+        md = history_data.T
+        self._img_md.set_data(md)
+        md_lo, md_hi = np.percentile(md, [2.0, 99.5])
+        if md_hi > md_lo:
+            self._img_md.set_clim(md_lo, md_hi)
         self._frame_label.set_text(
             f"frame {frame_idx}  |  range gate: {range_m:.1f} m  "
             f"(bin {result['range_bin']})"
         )
-        self._fig.canvas.draw_idle()
-        self._plt.pause(0.001)
+        # draw() + flush_events() is ~10x faster than plt.pause() because it
+        # does not force a sleep in the Tcl/Tk event loop.  This matters here
+        # because the frame rate is already bottlenecked by the SDR acquisition
+        # time and we do not want the display to add extra latency on top.
+        self._fig.canvas.draw()
+        self._fig.canvas.flush_events()
 
     def close(self) -> None:
         try:
@@ -367,6 +401,7 @@ class ModeASession:
                 result = process_frame(
                     cap.chirp_matrix,
                     apply_mti_filter=self.args.mti,
+                    window=self.args.window,
                     manual_range_bin=self.args.range_bin,
                     manual_range_m=self.args.range_m,
                     min_range_bin=self.args.min_range_bin,

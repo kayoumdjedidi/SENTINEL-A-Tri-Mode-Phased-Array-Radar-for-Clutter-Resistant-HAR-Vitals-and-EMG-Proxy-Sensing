@@ -229,6 +229,7 @@ def apply_mti(chirp_matrix: np.ndarray) -> np.ndarray:
 def range_doppler_map(
     chirp_matrix: np.ndarray,
     *,
+    window: bool = True,
     min_scale: float | None = None,
     max_scale: float | None = None,
 ) -> np.ndarray:
@@ -237,12 +238,24 @@ def range_doppler_map(
     Directly from Range_Doppler_Plot.py `freq_process`:
         fftshift(abs(fft2(data))).T  then log10
 
+    Parameters
+    ----------
+    window : bool
+        Apply a 2D Hanning window before the FFT (default True).
+        Reduces range/Doppler sidelobes from -13 dB (rectangular) to
+        -32 dB, greatly improving target visibility near clutter/leakage.
+
     Returns
     -------
     np.ndarray, shape (samples_per_chirp, num_chirps), float32
         Range on axis-0, Doppler on axis-1.
     """
     chirps = check_chirp_matrix(chirp_matrix)
+    if window:
+        # Outer product of two Hanning windows: one per dimension
+        w_doppler = np.hanning(chirps.shape[0]).astype(np.float32)
+        w_range = np.hanning(chirps.shape[1]).astype(np.float32)
+        chirps = chirps * w_doppler[:, np.newaxis] * w_range[np.newaxis, :]
     rd = np.fft.fftshift(np.abs(np.fft.fft2(chirps)))
     rd_log = np.log10(rd + 1e-10).T
     lo = rd_log.min() if min_scale is None else min_scale
@@ -329,6 +342,7 @@ def process_frame(
     chirp_matrix: np.ndarray,
     *,
     apply_mti_filter: bool = True,
+    window: bool = True,
     manual_range_bin: int | None = None,
     manual_range_m: float | None = None,
     min_range_bin: int | None = 0,
@@ -363,7 +377,7 @@ def process_frame(
     """
     raw = check_chirp_matrix(chirp_matrix)
     proc = apply_mti(raw) if apply_mti_filter else raw.copy()
-    rd = range_doppler_map(proc, min_scale=min_scale, max_scale=max_scale)
+    rd = range_doppler_map(proc, window=window, min_scale=min_scale, max_scale=max_scale)
     prof = range_profile(rd)
     rbin = select_range_gate(
         prof,
