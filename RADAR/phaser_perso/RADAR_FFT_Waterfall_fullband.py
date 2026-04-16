@@ -28,7 +28,7 @@ import adi
 RPI_IP = "ip:phaser.local"
 SDR_IP = "ip:phaser.local:50901"
 
-SAMPLE_RATE = 4e6
+SAMPLE_RATE = 0.6e6   # 4e6 saturates 100Mbit Ethernet (32 MB/s > 12.5 MB/s capacity)
 CENTER_FREQ = 2.1e9
 SIGNAL_FREQ = 100e3
 NUM_SLICES = 400
@@ -138,24 +138,6 @@ dist = (freq - SIGNAL_FREQ) * c / (4 * slope)
 
 clutter_estimate = None
 CLUTTER_ALPHA = 0.95
-
-
-class RxWorker(QThread):
-    data_ready = pyqtSignal(object)
-
-    def run(self):
-        for _ in range(3):
-            try:
-                my_sdr.rx()
-            except Exception:
-                pass
-        while not self.isInterruptionRequested():
-            try:
-                data = my_sdr.rx()
-                self.data_ready.emit(data)
-            except Exception as exc:
-                print(f"[RX] {exc}")
-                break
 
 
 class Window(QMainWindow):
@@ -358,25 +340,40 @@ class Window(QMainWindow):
             self.fft_plot.enableAutoRange("xy", False)
         self.frame_index += 1
 
+    def update_display_timer(self):
+        """Called by QTimer on the main thread — mirrors reference script pattern."""
+        try:
+            data = my_sdr.rx()
+        except Exception as exc:
+            print(f"[RX] {exc}")
+            return
+        self.update_display(data)
+
     def end_program(self):
-        my_sdr.tx_destroy_buffer()
+        try:
+            my_sdr.tx_destroy_buffer()
+        except Exception:
+            pass
         self.close()
 
+
+# Flush stale buffers before starting
+for _ in range(3):
+    try:
+        my_sdr.rx()
+    except Exception:
+        pass
 
 app = QApplication(sys.argv)
 win = Window()
 
-worker = RxWorker()
-worker.data_ready.connect(win.update_display)
-worker.start()
+# QTimer(0) fires update() as fast as the main loop allows — identical to the
+# reference FMCW_RADAR_Waterfall.py.  rx() blocks for ~6.8 ms (4096 samples at
+# 0.6 MHz) so the GUI never feels frozen, and there is zero thread overhead.
+from pyqtgraph.Qt import QtCore
+timer = QtCore.QTimer()
+timer.timeout.connect(win.update_display_timer)
+timer.start(0)
 
 print("Full-band FMCW waterfall running. Close the window or press Quit to stop.")
-ret = app.exec()
-
-worker.requestInterruption()
-worker.wait(2000)
-try:
-    my_sdr.tx_destroy_buffer()
-except Exception:
-    pass
-sys.exit(ret)
+sys.exit(app.exec())
