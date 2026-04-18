@@ -1,0 +1,22 @@
+RADAR/phaser_perso/last_conversation_context.md
+RADAR/phaser_perso/OPERATIONS.md
+RADAR/phaser_perso/PLAN_phaser_tracker.md
+RADAR/phaser_perso/expected_page10.png
+RADAR/phaser_perso/expected_page11.png
+RADAR/phaser_perso/image.png
+RADAR/phaser_perso/reference/CFAR_RADAR_Waterfall.py
+RADAR/phaser_perso/reference/CFAR_RADAR_Waterfall_ChirpSync.py
+RADAR/phaser_perso/reference/CW_RADAR_Waterfall.py
+RADAR/phaser_perso/reference/FMCW_RADAR_Waterfall.py
+RADAR/phaser_perso/reference/FMCW_RADAR_Waterfall_ChirpSync.py
+RADAR/phaser_perso/reference/Range_Doppler_Plot.py
+RADAR/phaser_perso/reference/Range_Doppler_Processing.py
+RADAR/phaser_perso/reference/target_detection_dbfs.py
+RADAR/phaser_perso/reference/README.md
+RADAR/phaser_perso/reference/video_transcript.md
+RADAR/phaser_perso/tests/test_radar_dsp.py
+RADAR/phaser_perso/tests/test_sentinel_core.py
+RADAR/team_sentinel/introduction.md
+RADAR/team_sentinel/ML Course Presentation.md
+RADAR/team_sentinel/notes_team_sentinel.md
+RADAR/team_sentinel/current.md
