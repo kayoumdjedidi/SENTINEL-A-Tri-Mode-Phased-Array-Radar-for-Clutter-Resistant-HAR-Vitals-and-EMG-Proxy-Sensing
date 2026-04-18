@@ -150,6 +150,11 @@ class SentinelWindow(QMainWindow):
         self._last_rd:   np.ndarray | None = None
         self._clutter_map: np.ndarray | None = None   # EMA background for RD subtraction
 
+        # Cache axis extents — used to re-enforce plot ranges every frame
+        self._v_min = float(self._vel_ms.min())
+        self._v_max = float(self._vel_ms.max())
+        self._v_span = self._v_max - self._v_min
+
         self._history = MicroDopplerHistory(
             history_len=args.history_len,
             doppler_bins=cfg.num_chirps,
@@ -329,7 +334,7 @@ class SentinelWindow(QMainWindow):
         lay.addWidget(self._ema_cb)
 
         lay.addWidget(lbl("EMA alpha (0=fast, 99=slow)"))
-        self._ema_sl  = hslider(50, 99, 90)   # /100 → 0.90 default
+        self._ema_sl  = hslider(50, 99, 70)   # /100 → 0.70 default  (~3-frame TC)
         self._ema_lbl = lbl("α=0.90", small=True)
         self._ema_sl.valueChanged.connect(
             lambda v: self._ema_lbl.setText(f"α={v/100:.2f}")
@@ -341,6 +346,13 @@ class SentinelWindow(QMainWindow):
         reset_clutter.setFixedHeight(24)
         reset_clutter.clicked.connect(self._reset_clutter_map)
         lay.addWidget(reset_clutter)
+
+        # Debug: bypass EMA+MTI to see raw RD — useful for confirming hardware
+        # detects the user before enabling motion-only processing.
+        self._raw_rd_cb = QCheckBox("Raw RD (disable MTI+EMA — debug)")
+        self._raw_rd_cb.setChecked(False)
+        self._raw_rd_cb.setStyleSheet("font-size: 10px; color: #ffcc44;")
+        lay.addWidget(self._raw_rd_cb)
 
         # ── Color levels ──────────────────────────────────────────────
         lay.addWidget(lbl("Color floor (×0.1 log10)"))
@@ -485,10 +497,12 @@ class SentinelWindow(QMainWindow):
         except Exception:
             beat_fft_pos = None
 
+        raw_rd_mode = self._raw_rd_cb.isChecked()
+
         # ── DSP pipeline ─────────────────────────────────────────────
         result = process_frame(
             cap.chirp_matrix,
-            apply_mti_filter=self._mti_cb.isChecked(),
+            apply_mti_filter=(self._mti_cb.isChecked() and not raw_rd_mode),
             window=self._win_cb.isChecked(),
             range_axis_m=self._range_m,
             min_range_m=0.3,
@@ -524,11 +538,10 @@ class SentinelWindow(QMainWindow):
         range_pos = self._range_pos
 
         # ── EMA 2-D clutter subtraction ───────────────────────────────
-        # Removes any static 2D pattern (diagonal leakage stripes, DC ghost).
-        # Preserves dynamic targets: they appear as transient residuals above
-        # the slowly-updated background.
+        # Removes static 2D patterns (leakage stripes, DC).
+        # Raw RD debug mode bypasses both MTI and EMA so static targets are visible.
         rd_display = rd_pos.copy()
-        if self._ema_cb.isChecked():
+        if self._ema_cb.isChecked() and not raw_rd_mode:
             alpha = self._ema_sl.value() / 100.0
             if self._clutter_map is None or self._clutter_map.shape != rd_pos.shape:
                 self._clutter_map = rd_pos.copy()
@@ -587,8 +600,26 @@ class SentinelWindow(QMainWindow):
             self._cfar_curve.setData(x=range_pos, y=c_norm)
         self._gate_line_rp.setValue(range_m)
         self._gate_line_rd.setValue(range_m)
-        self._rd_img.setImage(rd_display, levels=(floor, ceil))
+
+        # Clip RD to display range so the image rect always matches the data shape
+        r_disp  = float(self._maxr_sl.value())
+        disp_ok = range_pos <= r_disp
+        rd_clipped = rd_display[disp_ok, :]
+        r_clipped  = range_pos[disp_ok]
+        r_span_clipped = float(r_clipped[-1]) if r_clipped.size else r_disp
+
+        # Re-enforce the physical coordinate rect every frame (pyqtgraph can
+        # override it with auto-range if image shape changes between frames)
+        v_min, v_span = self._v_min, self._v_span
+        self._rd_img.setRect(pg.QtCore.QRectF(v_min, 0.0, v_span, r_span_clipped))
+        self._rd_img.setImage(rd_clipped, levels=(floor, ceil))
+        self._p_rd.setXRange(v_min, self._v_max, padding=0)
+        self._p_rd.setYRange(0.0, r_disp, padding=0)
+
+        h = self._args.history_len
+        self._md_img.setRect(pg.QtCore.QRectF(0.0, v_min, float(h), v_span))
         self._md_img.setImage(history.T, levels=(floor, ceil))
+        self._p_md.setYRange(v_min, self._v_max, padding=0)
 
         # ── Recording + labels ────────────────────────────────────────
         if self._saving:
