@@ -60,6 +60,7 @@ class HardwareParams:
     """
     rpi_uri: str = "ip:phaser.local"
     sdr_uri: str = "ip:phaser.local:50901"
+    tdd_uri: str | None = None
 
     sample_rate: float = 4e6
     center_freq: float = 2.1e9
@@ -80,6 +81,7 @@ class HardwareParams:
     tdd_sync_external: bool = True
     tdd_ext_capture: bool = True
     tdd_begin_offset_frac: float = 0.1 # fraction of ramp to skip at start
+    tdd_arm_delay_s: float = 0.5       # wait after starting rx() before gpio_burst
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +260,12 @@ class TDDBurstBackend(_BaseBackend):
         self._program_pll("single_sawtooth_burst", delay_word=4095, tx_trig_en=1)
 
         # TDD engine setup -- matches Range_Doppler_Plot.py lines 141-165
-        sdr_pins = adi.one_bit_adc_dac(self.hw.sdr_uri)
+        tdd_uri = self.hw.tdd_uri or self.hw.sdr_uri
+        sdr_pins = adi.one_bit_adc_dac(tdd_uri)
         sdr_pins.gpio_tdd_ext_sync = self.hw.tdd_ext_capture
         sdr_pins.gpio_phaser_enable = True
 
-        tdd = adi.tddn(self.hw.sdr_uri)
+        tdd = adi.tddn(tdd_uri)
         tdd.enable = False
         tdd.sync_external = self.hw.tdd_sync_external
         tdd.startup_delay_ms = 0
@@ -274,7 +277,10 @@ class TDDBurstBackend(_BaseBackend):
             tdd.channel[ch].polarity = False
             tdd.channel[ch].on_raw = 0
             tdd.channel[ch].off_raw = 10
-        tdd.enable = True
+        # External-sync TDD can stay enabled because it waits for gpio_burst.
+        # Internal TDD starts as soon as it is enabled, so arm it per capture
+        # after rx() is already blocking on the DMA buffer.
+        tdd.enable = bool(self.hw.tdd_sync_external)
         self._tdd = tdd
 
         # Ramp timing (read back from hardware after programming)
@@ -334,13 +340,23 @@ class TDDBurstBackend(_BaseBackend):
         # arm the DMA before the GPIO pulse fires.
         t = threading.Thread(target=_do_rx, daemon=True)
         t.start()
-        time.sleep(0.5)  # 100 ms: buffer setup propagates to Pluto over USB-gadget TCP
+        time.sleep(max(0.0, self.hw.tdd_arm_delay_s))
 
-        # Now fire the TDD burst trigger
-        for v in (0, 1, 0):
-            _gpio(self._phaser, "gpio_burst", v)
+        # Now start the burst.  External sync is triggered by Phaser GPIO;
+        # internal sync is triggered by enabling the Pluto TDD engine.
+        if self.hw.tdd_sync_external:
+            for v in (0, 1, 0):
+                _gpio(self._phaser, "gpio_burst", v)
+        else:
+            self._tdd.enable = False
+            self._tdd.enable = True
 
         t.join(timeout=10.0)
+        if not self.hw.tdd_sync_external:
+            try:
+                self._tdd.enable = False
+            except Exception:
+                pass
 
         if exc_box:
             exc = exc_box[0]
@@ -348,8 +364,8 @@ class TDDBurstBackend(_BaseBackend):
                 raise RuntimeError(
                     "TDD rx() timed out (ETIMEDOUT) even after DMA-first fix.\n"
                     "\n"
-                    "The 50 ms DMA arm window may not be enough.  Try:\n"
-                    "  1. Increase the sleep in radar_backends.py (e.g. 0.10 s).\n"
+                    f"The {self.hw.tdd_arm_delay_s:.3f} s DMA arm window may not be enough.  Try:\n"
+                    "  1. Increase --tdd-arm-delay-s.\n"
                     "  2. Reduce buffer size: lower --num-chirps or --ramp-time-us.\n"
                     "  3. Use continuous backend: python radar_mode_a.py --acq continuous\n"
                 ) from exc
@@ -473,6 +489,7 @@ class ContinuousSawtoothBackend(_BaseBackend):
                 "backend": self.name,
                 "rx_buffer_size": int(self._sdr.rx_buffer_size),
                 "n_frame": self._n_frame,
+                "tdd_uri": self.hw.tdd_uri or self.hw.sdr_uri,
             },
         )
 

@@ -67,7 +67,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="N",
-        help="Frames to collect before stopping (default: run until CTRL+C)",
+        help="Frames to collect before stopping; omit or use 0 to run until CTRL+C",
     )
 
     # -- radar tuning --
@@ -155,6 +155,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="Phaser IIO URI")
     hw.add_argument("--sdr-uri", default="ip:phaser.local:50901",
                     help="Pluto SDR IIO URI (context forwarding)")
+    hw.add_argument(
+        "--tdd-uri",
+        default=None,
+        help="Pluto GPIO/TDD IIO URI for --acq tdd (default: same as --sdr-uri)",
+    )
 
     # -- TDD-only --
     tdd = p.add_argument_group("TDD options (--acq tdd only)")
@@ -163,6 +168,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     tdd.add_argument("--no-tdd-ext-sync", dest="tdd_ext_sync",
                      action="store_false", default=True,
                      help="Use internal TDD trigger instead of external sync")
+    tdd.add_argument("--tdd-arm-delay-s", type=float, default=0.5,
+                     help="Seconds to wait after starting rx() before pulsing gpio_burst")
 
     return p
 
@@ -338,6 +345,7 @@ class ModeASession:
         hw = HardwareParams(
             rpi_uri=self.args.rpi_uri,
             sdr_uri=self.args.sdr_uri,
+            tdd_uri=self.args.tdd_uri,
             sample_rate=self.args.sample_rate,
             center_freq=self.args.center_freq,
             signal_freq=self.args.signal_freq,
@@ -351,6 +359,7 @@ class ModeASession:
             frame_guard_ms=self.args.frame_guard_ms,
             tdd_sync_external=self.args.tdd_ext_sync,
             tdd_ext_capture=self.args.tdd_ext_sync,
+            tdd_arm_delay_s=self.args.tdd_arm_delay_s,
         )
 
         self._backend = make_backend(self.args.acq, hw)
@@ -474,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     args = build_arg_parser().parse_args(argv)
+    if args.frames is not None and args.frames <= 0:
+        args.frames = None
     session = ModeASession(args)
     try:
         session.connect()

@@ -160,6 +160,15 @@ class SentinelWindow(QMainWindow):
             doppler_bins=cfg.num_chirps,
         )
 
+        # Fixed background state — user stands clear, presses Capture BG,
+        # radar averages N frames, stores the empty-room RD map.
+        # Any new frame has this subtracted → person appears as residual.
+        self._fixed_bg:      np.ndarray | None = None
+        self._bg_capturing:  bool              = False
+        self._bg_accum:      np.ndarray | None = None
+        self._bg_count:      int               = 0
+        self._bg_target:     int               = 45   # ~3s at 15fps
+
         # Recording state
         self._saving        = False
         self._frame_idx     = 0
@@ -285,12 +294,12 @@ class SentinelWindow(QMainWindow):
 
         # ── DSP toggles ───────────────────────────────────────────────
         self._mti_cb  = QCheckBox("MTI clutter filter")
-        self._mti_cb.setChecked(True)
+        self._mti_cb.setChecked(False)   # OFF: show raw 2D FFT like ADI reference
         self._win_cb  = QCheckBox("Hanning window")
         self._win_cb.setChecked(True)
         self._cfar_cb = QCheckBox("CFAR range gate")
         self._cfar_cb.setChecked(True)
-        self._zrs_cb  = QCheckBox("Suppress TX leakage")
+        self._zrs_cb  = QCheckBox("Suppress TX leakage (range+Doppler)")
         self._zrs_cb.setChecked(True)
         for cb in (self._mti_cb, self._win_cb, self._cfar_cb, self._zrs_cb):
             lay.addWidget(cb)
@@ -323,19 +332,30 @@ class SentinelWindow(QMainWindow):
         lay.addWidget(self._ldw_sl)
         lay.addWidget(self._ldw_lbl)
 
+        # ── DC Doppler blank (removes v=0 static-clutter stripe) ──────
+        # Blanks columns around v=0 Doppler (DC) in the 2D RD map.
+        # This removes the bright vertical stripe from walls/floor/static objects.
+        # Does NOT blank moving targets (v≠0). Key for indoor HAR.
+        lay.addWidget(lbl("DC Doppler blank (cols ±)"))
+        self._dcw_sl  = hslider(0, 15, 3)
+        self._dcw_lbl = lbl("±3 cols", small=True)
+        self._dcw_sl.valueChanged.connect(
+            lambda v: self._dcw_lbl.setText(f"±{v} cols")
+        )
+        lay.addWidget(self._dcw_sl)
+        lay.addWidget(self._dcw_lbl)
+
         # ── EMA clutter subtraction ───────────────────────────────────
-        # Subtracts a rolling EMA background from the 2D RD map each frame.
-        # This removes static leakage stripes while keeping moving targets.
         self._ema_cb = QCheckBox("EMA clutter subtract (2D)")
-        self._ema_cb.setChecked(True)
+        self._ema_cb.setChecked(False)   # OFF by default — causes periodic artifacts
         self._ema_cb.stateChanged.connect(
             lambda _: self._reset_clutter_map()
         )
         lay.addWidget(self._ema_cb)
 
         lay.addWidget(lbl("EMA alpha (0=fast, 99=slow)"))
-        self._ema_sl  = hslider(50, 99, 70)   # /100 → 0.70 default  (~3-frame TC)
-        self._ema_lbl = lbl("α=0.90", small=True)
+        self._ema_sl  = hslider(50, 99, 95)   # /100 → 0.95 default  (~20-frame TC)
+        self._ema_lbl = lbl("α=0.95", small=True)
         self._ema_sl.valueChanged.connect(
             lambda v: self._ema_lbl.setText(f"α={v/100:.2f}")
         )
@@ -354,10 +374,32 @@ class SentinelWindow(QMainWindow):
         self._raw_rd_cb.setStyleSheet("font-size: 10px; color: #ffcc44;")
         lay.addWidget(self._raw_rd_cb)
 
+        # ── Fixed background subtraction ──────────────────────────────
+        # Procedure: stand CLEAR of the scene, click Capture BG, wait 3s.
+        # Then step in front — you'll appear as a bright residual even static.
+        lay.addWidget(lbl("Fixed Background Subtraction"))
+        self._bg_cb = QCheckBox("Subtract fixed BG")
+        self._bg_cb.setChecked(False)
+        lay.addWidget(self._bg_cb)
+
+        self._bg_btn = QPushButton("Capture BG (stand clear, 3s)")
+        self._bg_btn.setFixedHeight(26)
+        self._bg_btn.clicked.connect(self._on_capture_bg)
+        lay.addWidget(self._bg_btn)
+
+        clear_bg = QPushButton("Clear Fixed BG")
+        clear_bg.setFixedHeight(24)
+        clear_bg.clicked.connect(self._on_clear_bg)
+        lay.addWidget(clear_bg)
+
+        self._bg_lbl = lbl("No BG captured", small=True)
+        self._bg_lbl.setStyleSheet("font-size: 10px; color: #888;")
+        lay.addWidget(self._bg_lbl)
+
         # ── Color levels ──────────────────────────────────────────────
         lay.addWidget(lbl("Color floor (×0.1 log10)"))
-        self._floor_sl  = hslider(0, 80, 20)
-        self._floor_lbl = lbl("2.0", small=True)
+        self._floor_sl  = hslider(0, 80, 50)   # 5.0 default — fits raw log10 RD
+        self._floor_lbl = lbl("5.0", small=True)
         self._floor_sl.valueChanged.connect(
             lambda v: self._floor_lbl.setText(f"{v/10:.1f}")
         )
@@ -373,10 +415,15 @@ class SentinelWindow(QMainWindow):
         lay.addWidget(self._ceil_sl)
         lay.addWidget(self._ceil_lbl)
 
-        auto_lv = QPushButton("Auto Level")
+        auto_lv = QPushButton("Auto Level (once)")
         auto_lv.setFixedHeight(24)
         auto_lv.clicked.connect(self._on_auto_level)
         lay.addWidget(auto_lv)
+
+        self._autoscale_cb = QCheckBox("Auto-scale every frame")
+        self._autoscale_cb.setChecked(False)  # OFF — causes whole-view flicker
+        self._autoscale_cb.setStyleSheet("font-size: 10px; color: #aaffaa;")
+        lay.addWidget(self._autoscale_cb)
 
         # ── Recording ─────────────────────────────────────────────────
         self._save_cb = QCheckBox("Record session")
@@ -520,34 +567,73 @@ class SentinelWindow(QMainWindow):
             hi_r = min(rd.shape[0], zero_bin + zrw)
             rd[lo_r:hi_r, :] = rd_min
 
+            n_dop = rd.shape[1]
+            half  = n_dop // 2
+
             leakage_offset = int(round(
                 cfg.signal_freq * cfg.ramp_time_s * cfg.num_chirps
             ))
             ldw = self._ldw_sl.value()
             if leakage_offset > 0 and ldw > 0:
-                n_dop = rd.shape[1]
-                half  = n_dop // 2
                 for sign in (+1, -1):
                     col_c = half + sign * leakage_offset
                     lo_c  = max(0,     col_c - ldw)
                     hi_c  = min(n_dop, col_c + ldw + 1)
                     rd[:, lo_c:hi_c] = rd_min
 
+            # DC Doppler blank: remove the v=0 static-clutter stripe.
+            # This blanks indoor static clutter (walls/floor) from the RD display
+            # while preserving moving targets at v≠0.  Applied before positive clip
+            # so the DC column is suppressed across all ranges.
+            dcw = self._dcw_sl.value()
+            if dcw > 0:
+                lo_dc = max(0,     half - dcw)
+                hi_dc = min(n_dop, half + dcw + 1)
+                rd[:, lo_dc:hi_dc] = rd_min
+
         # ── Positive range clip ───────────────────────────────────────
         rd_pos    = rd[self._pos_mask, :]
         range_pos = self._range_pos
 
-        # ── EMA 2-D clutter subtraction ───────────────────────────────
-        # Removes static 2D patterns (leakage stripes, DC).
-        # Raw RD debug mode bypasses both MTI and EMA so static targets are visible.
-        rd_display = rd_pos.copy()
-        if self._ema_cb.isChecked() and not raw_rd_mode:
-            alpha = self._ema_sl.value() / 100.0
-            if self._clutter_map is None or self._clutter_map.shape != rd_pos.shape:
-                self._clutter_map = rd_pos.copy()
+        # ── Fixed background accumulation ─────────────────────────────
+        if self._bg_capturing:
+            if self._bg_accum is None or self._bg_accum.shape != rd_pos.shape:
+                self._bg_accum = rd_pos.astype(np.float64)
+                self._bg_count = 1
             else:
-                self._clutter_map = alpha * self._clutter_map + (1.0 - alpha) * rd_pos
-            rd_display = np.maximum(rd_pos - self._clutter_map, 0.0)
+                self._bg_accum += rd_pos
+                self._bg_count += 1
+            remaining = self._bg_target - self._bg_count
+            self._bg_lbl.setText(f"Capturing… {self._bg_count}/{self._bg_target} ({remaining} left)")
+            if self._bg_count >= self._bg_target:
+                self._fixed_bg  = (self._bg_accum / self._bg_count).astype(np.float32)
+                self._bg_capturing = False
+                self._bg_accum  = None
+                self._bg_btn.setEnabled(True)
+                self._bg_cb.setChecked(True)
+                self._bg_lbl.setText(f"BG captured ({self._bg_count} frames) ✓")
+                self._bg_lbl.setStyleSheet("font-size: 10px; color: #88ff88;")
+
+        # ── Clutter subtraction (optional, one stage only) ────────────
+        # Priority: Fixed BG > EMA > none (raw).
+        # The two modes are mutually exclusive in the subtraction stage to
+        # avoid the double-subtraction instability seen previously.
+        rd_display = rd_pos.copy()
+        if not raw_rd_mode:
+            if self._bg_cb.isChecked() and self._fixed_bg is not None \
+                    and self._fixed_bg.shape == rd_pos.shape:
+                # Fixed background captured without person present.
+                # Person (even static) shows as a residual above the empty scene.
+                rd_display = np.maximum(rd_pos - self._fixed_bg, 0.0)
+            elif self._ema_cb.isChecked():
+                # EMA-only (no fixed BG): adapts to current scene.
+                # Warning: person absorbed into background after ~TC frames.
+                alpha = self._ema_sl.value() / 100.0
+                if self._clutter_map is None or self._clutter_map.shape != rd_pos.shape:
+                    self._clutter_map = rd_pos.copy()
+                else:
+                    self._clutter_map = alpha * self._clutter_map + (1.0 - alpha) * rd_pos
+                rd_display = np.maximum(rd_pos - self._clutter_map, 0.0)
 
         self._last_rd = rd_display
 
@@ -580,14 +666,22 @@ class SentinelWindow(QMainWindow):
         range_m = float(range_pos[sel_bin_pos]) if sel_bin_pos < len(range_pos) else 0.0
 
         # ── Micro-Doppler ─────────────────────────────────────────────
-        md_slice = rd_display[sel_bin_pos, :].astype(np.float32)
+        # Use rd_pos (raw 2D FFT with DC blank, pre-EMA/BG subtraction) so
+        # the history always contains real Doppler content — not EMA residuals.
+        md_slice = rd_pos[sel_bin_pos, :].astype(np.float32)
         history  = self._history.push(md_slice)
 
         # ── Display levels ────────────────────────────────────────────
-        floor = self._floor_sl.value() / 10.0
-        ceil  = self._ceil_sl.value()  / 10.0
-        if ceil <= floor:
-            ceil = floor + 0.1
+        if self._autoscale_cb.isChecked() and rd_display.size > 0:
+            lo, hi = np.percentile(rd_display, [2.0, 99.5])
+            lo  = max(0.0, float(lo))
+            hi  = max(lo + 1e-9, float(hi))
+            floor, ceil = lo, hi
+        else:
+            floor = self._floor_sl.value() / 10.0
+            ceil  = self._ceil_sl.value()  / 10.0
+            if ceil <= floor:
+                ceil = floor + 0.1
 
         # ── Plot updates ──────────────────────────────────────────────
         if beat_fft_pos is not None:
@@ -661,6 +755,26 @@ class SentinelWindow(QMainWindow):
 
     def _reset_clutter_map(self) -> None:
         self._clutter_map = None
+
+    def _on_capture_bg(self) -> None:
+        self._bg_capturing = True
+        self._bg_accum  = None
+        self._bg_count  = 0
+        self._fixed_bg  = None
+        self._bg_btn.setEnabled(False)
+        self._bg_cb.setChecked(False)
+        self._bg_lbl.setText("Capturing… 0/45")
+        self._bg_lbl.setStyleSheet("font-size: 10px; color: #ffcc44;")
+
+    def _on_clear_bg(self) -> None:
+        self._fixed_bg  = None
+        self._bg_capturing = False
+        self._bg_accum  = None
+        self._bg_count  = 0
+        self._bg_cb.setChecked(False)
+        self._bg_btn.setEnabled(True)
+        self._bg_lbl.setText("No BG captured")
+        self._bg_lbl.setStyleSheet("font-size: 10px; color: #888;")
 
     def _on_steer(self, value: int) -> None:
         self._steer_lbl.setText(f"{value}°")

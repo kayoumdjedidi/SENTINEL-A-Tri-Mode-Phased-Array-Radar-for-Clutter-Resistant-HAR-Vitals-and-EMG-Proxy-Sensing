@@ -161,7 +161,9 @@ q = np.sin(2 * np.pi * t * fc) * 2 ** 14
 iq = 1 * (i + 1j * q)
 
 # Send data
-my_sdr._ctx.set_timeout(0)
+# Use a finite timeout so stalled receive paths fail with an error instead of
+# freezing the Qt event loop indefinitely.
+my_sdr._ctx.set_timeout(5000)
 my_sdr.tx([iq * 0.5, iq])  # only send data to the 2nd channel (that's all we need)
 
 c = 3e8
@@ -447,7 +449,13 @@ def update():
     global index, plot_dist, freq, dist
     label_style = {"color": "#FFF", "font-size": "14pt"}
 
-    data = my_sdr.rx()
+    try:
+        data = my_sdr.rx()
+    except OSError as ex:
+        print(f"[waterfall] rx() failed: {ex}", file=sys.stderr, flush=True)
+        timer.stop()
+        QtCore.QTimer.singleShot(0, App.quit)
+        return
     data = data[0] + data[1]
     win_funct = np.blackman(len(data))
     y = data * win_funct
