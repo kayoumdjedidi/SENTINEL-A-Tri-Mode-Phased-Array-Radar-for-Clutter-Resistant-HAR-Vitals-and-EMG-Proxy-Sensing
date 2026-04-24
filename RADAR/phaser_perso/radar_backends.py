@@ -78,10 +78,17 @@ class HardwareParams:
 
     # TDD-only
     frame_guard_ms: float = 0.2        # added to ramp to form PRI
+    tdd_trigger: str = "external"      # external, internal, or soft
     tdd_sync_external: bool = True
     tdd_ext_capture: bool = True
     tdd_begin_offset_frac: float = 0.1 # fraction of ramp to skip at start
     tdd_arm_delay_s: float = 0.5       # wait after starting rx() before gpio_burst
+    tdd_rx_timeout_ms: int = 30000     # TDD burst DMA can take longer to unblock
+    tdd_internal_period_ms: float = 1000.0
+    tdd_external_pulse_high_s: float = 0.05
+    tdd_external_pulse_gap_s: float = 0.05
+    tdd_external_pulse_count: int = 1
+    tdd_external_pulse_active: str = "high"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +114,47 @@ def _gpio(phaser, name: str, value) -> None:
             setattr(obj, name, value)
             return
     raise AttributeError(f"Cannot set {name} on phaser object")
+
+
+def _abandon_rx_buffer(sdr) -> None:
+    """Drop a failed RX buffer without calling libiio's buffer destructor.
+
+    On Windows, libiio can throw an access violation while destroying a buffer
+    after an ETIMEDOUT TDD refill.  At that point the process is already
+    unwinding from a failed capture, so leaking this invalid buffer is safer
+    than calling the failing destructor.
+    """
+    rxbuf = getattr(sdr, "_rxbuf", None)
+    if rxbuf is not None and hasattr(rxbuf, "_buffer"):
+        try:
+            rxbuf._buffer = None
+        except Exception:
+            pass
+    try:
+        sdr._rxbuf = None
+    except Exception:
+        pass
+
+
+def _try_set(obj, name: str, value) -> bool:
+    try:
+        setattr(obj, name, value)
+        return True
+    except Exception:
+        return False
+
+
+def _one_bit_labels(pins) -> set[str]:
+    ctrl = getattr(pins, "_ctrl", None)
+    if ctrl is None:
+        return set()
+    labels: set[str] = set()
+    for ch in ctrl.channels:
+        try:
+            labels.add(ch.attrs["label"].value.lower())
+        except Exception:
+            pass
+    return labels
 
 
 class _BaseBackend:
@@ -257,17 +305,32 @@ class TDDBurstBackend(_BaseBackend):
     def connect(self) -> RadarConfig:
         adi = _import_adi()
         self._bring_up_hardware()
+        self._sdr._ctx.set_timeout(int(self.hw.tdd_rx_timeout_ms))
         self._program_pll("single_sawtooth_burst", delay_word=4095, tx_trig_en=1)
 
         # TDD engine setup -- matches Range_Doppler_Plot.py lines 141-165
         tdd_uri = self.hw.tdd_uri or self.hw.sdr_uri
         sdr_pins = adi.one_bit_adc_dac(tdd_uri)
-        sdr_pins.gpio_tdd_ext_sync = self.hw.tdd_ext_capture
+        trigger = self.hw.tdd_trigger
+        labels = _one_bit_labels(sdr_pins)
+        if trigger == "external" and "tdd_ext_sync" not in labels:
+            raise RuntimeError(
+                "External TDD requested, but the Pluto one-bit-adc-dac context "
+                "does not expose a backed 'tdd_ext_sync' GPIO. This setup only "
+                "exposes: "
+                + ", ".join(sorted(labels))
+                + ". Use --tdd-trigger soft."
+            )
+        if "tdd_ext_sync" in labels:
+            sdr_pins.gpio_tdd_ext_sync = trigger == "external"
         sdr_pins.gpio_phaser_enable = True
 
         tdd = adi.tddn(tdd_uri)
         tdd.enable = False
-        tdd.sync_external = self.hw.tdd_sync_external
+        tdd.sync_external = trigger == "external"
+        _try_set(tdd, "sync_internal", trigger == "internal")
+        _try_set(tdd, "internal_sync_period_ms", self.hw.tdd_internal_period_ms)
+        _try_set(tdd, "sync_reset", True)
         tdd.startup_delay_ms = 0
         pri_ms = self.hw.ramp_time_us / 1e3 + self.hw.frame_guard_ms
         tdd.frame_length_ms = pri_ms
@@ -277,10 +340,9 @@ class TDDBurstBackend(_BaseBackend):
             tdd.channel[ch].polarity = False
             tdd.channel[ch].on_raw = 0
             tdd.channel[ch].off_raw = 10
-        # External-sync TDD can stay enabled because it waits for gpio_burst.
-        # Internal TDD starts as soon as it is enabled, so arm it per capture
-        # after rx() is already blocking on the DMA buffer.
-        tdd.enable = bool(self.hw.tdd_sync_external)
+        # Arm all trigger modes per capture after rx() is already blocking.
+        # This avoids missing a short burst before the DMA buffer exists.
+        tdd.enable = False
         self._tdd = tdd
 
         # Ramp timing (read back from hardware after programming)
@@ -318,6 +380,27 @@ class TDDBurstBackend(_BaseBackend):
         self._start_tx_tone()
         return self._cfg
 
+    def _pulse_external_sync(self, *, sleep_fn) -> None:
+        if self.hw.tdd_external_pulse_active == "high":
+            idle, active = 0, 1
+        elif self.hw.tdd_external_pulse_active == "low":
+            idle, active = 1, 0
+        else:
+            raise RuntimeError(
+                "tdd_external_pulse_active must be 'high' or 'low', got "
+                f"{self.hw.tdd_external_pulse_active!r}"
+            )
+
+        count = max(1, int(self.hw.tdd_external_pulse_count))
+        for idx in range(count):
+            _gpio(self._phaser, "gpio_burst", idle)
+            sleep_fn(max(0.0, self.hw.tdd_external_pulse_gap_s))
+            _gpio(self._phaser, "gpio_burst", active)
+            sleep_fn(max(0.0, self.hw.tdd_external_pulse_high_s))
+            _gpio(self._phaser, "gpio_burst", idle)
+            if idx < count - 1:
+                sleep_fn(max(0.0, self.hw.tdd_external_pulse_gap_s))
+
     def capture(self) -> CaptureResult:
         if self._cfg is None:
             raise RuntimeError("Call connect() first")
@@ -342,37 +425,42 @@ class TDDBurstBackend(_BaseBackend):
         t.start()
         time.sleep(max(0.0, self.hw.tdd_arm_delay_s))
 
-        # Now start the burst.  External sync is triggered by Phaser GPIO;
-        # internal sync is triggered by enabling the Pluto TDD engine.
-        if self.hw.tdd_sync_external:
-            for v in (0, 1, 0):
-                _gpio(self._phaser, "gpio_burst", v)
-        else:
-            self._tdd.enable = False
-            self._tdd.enable = True
+        # Now start the burst.  Soft sync is the most direct Pluto-side test;
+        # external sync uses the Phaser GPIO line; internal sync uses the
+        # Pluto TDD controller's periodic sync generator.
+        self._tdd.enable = True
+        if self.hw.tdd_trigger == "soft":
+            time.sleep(0.01)
+            self._tdd.sync_soft = True
+        elif self.hw.tdd_trigger == "external":
+            self._pulse_external_sync(sleep_fn=time.sleep)
+        elif self.hw.tdd_trigger != "internal":
+            raise RuntimeError(f"Unknown TDD trigger mode: {self.hw.tdd_trigger}")
 
-        t.join(timeout=10.0)
-        if not self.hw.tdd_sync_external:
-            try:
-                self._tdd.enable = False
-            except Exception:
-                pass
+        rx_timeout_s = max(10.0, self.hw.tdd_rx_timeout_ms / 1000.0 + 5.0)
+        t.join(timeout=rx_timeout_s)
+        try:
+            self._tdd.enable = False
+        except Exception:
+            pass
 
         if exc_box:
             exc = exc_box[0]
             if isinstance(exc, OSError) and exc.errno == 110:  # ETIMEDOUT
+                _abandon_rx_buffer(self._sdr)
                 raise RuntimeError(
-                    "TDD rx() timed out (ETIMEDOUT) even after DMA-first fix.\n"
+                    "TDD rx() timed out (ETIMEDOUT) after the RX buffer was armed.\n"
                     "\n"
-                    f"The {self.hw.tdd_arm_delay_s:.3f} s DMA arm window may not be enough.  Try:\n"
-                    "  1. Increase --tdd-arm-delay-s.\n"
-                    "  2. Reduce buffer size: lower --num-chirps or --ramp-time-us.\n"
-                    "  3. Use continuous backend: python radar_mode_a.py --acq continuous\n"
+                    "This means the TDD trigger path did not fill the Pluto DMA buffer. "
+                    f"Trigger mode was '{self.hw.tdd_trigger}'.\n"
                 ) from exc
             raise exc
 
         if "data" not in result:
-            raise RuntimeError("TDD capture thread ended without returning data (timeout).")
+            raise RuntimeError(
+                "TDD capture thread did not return data before the Python join "
+                f"timeout ({rx_timeout_s:.1f} s)."
+            )
 
         data = result["data"]
         ch0 = np.asarray(data[0], dtype=np.complex64)
@@ -400,6 +488,7 @@ class TDDBurstBackend(_BaseBackend):
             valid=valid,
             info={
                 "backend": self.name,
+                "tdd_trigger": self.hw.tdd_trigger,
                 "rx_buffer_size": int(self._sdr.rx_buffer_size),
                 "good_ramp_samples": spc,
                 "n_frame": self._n_frame,

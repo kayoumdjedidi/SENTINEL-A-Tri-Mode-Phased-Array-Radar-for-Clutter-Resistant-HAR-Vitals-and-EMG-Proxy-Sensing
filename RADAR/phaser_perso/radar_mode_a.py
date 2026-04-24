@@ -165,11 +165,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     tdd = p.add_argument_group("TDD options (--acq tdd only)")
     tdd.add_argument("--frame-guard-ms", type=float, default=0.2,
                      help="Guard interval added to ramp to form PRI")
+    tdd.add_argument(
+        "--tdd-trigger",
+        choices=["external", "internal", "soft"],
+        default=None,
+        help="TDD sync source. Defaults to external, or internal with --no-tdd-ext-sync.",
+    )
     tdd.add_argument("--no-tdd-ext-sync", dest="tdd_ext_sync",
                      action="store_false", default=True,
-                     help="Use internal TDD trigger instead of external sync")
+                     help="Backward-compatible alias for --tdd-trigger internal")
     tdd.add_argument("--tdd-arm-delay-s", type=float, default=0.5,
                      help="Seconds to wait after starting rx() before pulsing gpio_burst")
+    tdd.add_argument("--tdd-rx-timeout-ms", type=int, default=30000,
+                     help="IIO rx timeout for TDD burst capture")
+    tdd.add_argument("--tdd-internal-period-ms", type=float, default=1000.0,
+                     help="Period for the Pluto TDD internal sync generator")
+    tdd.add_argument("--tdd-external-pulse-high-s", type=float, default=0.05,
+                     help="Seconds to hold Phaser gpio_burst active for external TDD")
+    tdd.add_argument("--tdd-external-pulse-gap-s", type=float, default=0.05,
+                     help="Seconds to hold Phaser gpio_burst idle before/between pulses")
+    tdd.add_argument("--tdd-external-pulse-count", type=int, default=1,
+                     help="Number of external gpio_burst pulses per capture")
+    tdd.add_argument("--tdd-external-pulse-active", choices=["high", "low"],
+                     default="high", help="Active polarity for external gpio_burst pulse")
 
     return p
 
@@ -342,6 +360,10 @@ class ModeASession:
         if len(taper) != 8:
             raise ValueError("--gain-taper must supply exactly 8 values")
 
+        tdd_trigger = self.args.tdd_trigger
+        if tdd_trigger is None:
+            tdd_trigger = "external" if self.args.tdd_ext_sync else "internal"
+
         hw = HardwareParams(
             rpi_uri=self.args.rpi_uri,
             sdr_uri=self.args.sdr_uri,
@@ -357,9 +379,16 @@ class ModeASession:
             num_chirps=self.args.num_chirps,
             gain_taper=taper,
             frame_guard_ms=self.args.frame_guard_ms,
-            tdd_sync_external=self.args.tdd_ext_sync,
-            tdd_ext_capture=self.args.tdd_ext_sync,
+            tdd_trigger=tdd_trigger,
+            tdd_sync_external=tdd_trigger == "external",
+            tdd_ext_capture=tdd_trigger == "external",
             tdd_arm_delay_s=self.args.tdd_arm_delay_s,
+            tdd_rx_timeout_ms=self.args.tdd_rx_timeout_ms,
+            tdd_internal_period_ms=self.args.tdd_internal_period_ms,
+            tdd_external_pulse_high_s=self.args.tdd_external_pulse_high_s,
+            tdd_external_pulse_gap_s=self.args.tdd_external_pulse_gap_s,
+            tdd_external_pulse_count=self.args.tdd_external_pulse_count,
+            tdd_external_pulse_active=self.args.tdd_external_pulse_active,
         )
 
         self._backend = make_backend(self.args.acq, hw)
@@ -379,6 +408,9 @@ class ModeASession:
             f"v_res={self._cfg.vel_res_m_s:.3f}m/s  "
             f"max_vel=±{self._cfg.max_vel_m_s:.1f}m/s"
         )
+        if self.args.acq == "tdd":
+            print(f"[tdd] trigger={tdd_trigger}")
+        self._tdd_trigger = tdd_trigger
 
     def run(self) -> None:
         from radar_dsp import MicroDopplerHistory, process_frame
@@ -466,6 +498,14 @@ class ModeASession:
             labels={"segments": [], "acq_mode": self.args.acq},
             metadata={
                 "acq": self.args.acq,
+                "tdd_trigger": getattr(self, "_tdd_trigger", None),
+                "sdr_uri": self.args.sdr_uri,
+                "tdd_uri": self.args.tdd_uri,
+                "rpi_uri": self.args.rpi_uri,
+                "tdd_external_pulse_high_s": self.args.tdd_external_pulse_high_s,
+                "tdd_external_pulse_gap_s": self.args.tdd_external_pulse_gap_s,
+                "tdd_external_pulse_count": self.args.tdd_external_pulse_count,
+                "tdd_external_pulse_active": self.args.tdd_external_pulse_active,
                 "mti": self.args.mti,
                 "steer_deg": self.args.steer,
             },
