@@ -436,8 +436,11 @@ def save_session(
     *,
     out_dir: Path | str,
     cfg: RadarConfig,
-    raw_bursts: np.ndarray,   # (n_frames, n_chirps, spc) complex64
-    spectrograms: np.ndarray, # (n_frames, n_doppler) float32
+    raw_bursts: np.ndarray,            # (n_frames, n_chirps, spc) complex64
+    spectrograms: np.ndarray,          # (n_frames, n_doppler) float32
+    raw_ch0: np.ndarray | None = None, # (n_frames, n_chirps, spc) complex64
+    raw_ch1: np.ndarray | None = None, # (n_frames, n_chirps, spc) complex64
+    valid_chirps: np.ndarray | None = None,  # (n_frames,) int32
     session_name: str | None = None,
     labels: dict | None = None,
     metadata: dict | None = None,
@@ -449,8 +452,11 @@ def save_session(
         <out_dir>/<session_name>/
             config.json
             labels.json
-            raw_bursts.npy       -- (n_frames, n_chirps, spc) complex64
+            raw_bursts.npy       -- (n_frames, n_chirps, spc) complex64  summed beam
+            raw_ch0.npy          -- (n_frames, n_chirps, spc) complex64  Pluto RX0
+            raw_ch1.npy          -- (n_frames, n_chirps, spc) complex64  Pluto RX1
             spectrograms.npy     -- (n_frames, n_doppler) float32
+            valid_chirps.npy     -- (n_frames,) int32
             config_adi.npy       -- 7-element ADI-compatible config array
     """
     base = Path(out_dir)
@@ -469,6 +475,13 @@ def save_session(
     np.save(sdir / "raw_bursts.npy", np.asarray(raw_bursts, dtype=np.complex64))
     np.save(sdir / "spectrograms.npy", np.asarray(spectrograms, dtype=np.float32))
     np.save(sdir / "config_adi.npy", cfg.to_adi_array())
+
+    if raw_ch0 is not None:
+        np.save(sdir / "raw_ch0.npy", np.asarray(raw_ch0, dtype=np.complex64))
+    if raw_ch1 is not None:
+        np.save(sdir / "raw_ch1.npy", np.asarray(raw_ch1, dtype=np.complex64))
+    if valid_chirps is not None:
+        np.save(sdir / "valid_chirps.npy", np.asarray(valid_chirps, dtype=np.int32))
 
     return sdir
 

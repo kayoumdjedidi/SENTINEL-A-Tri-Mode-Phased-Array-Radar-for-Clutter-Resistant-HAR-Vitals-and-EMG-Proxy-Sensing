@@ -1,0 +1,38 @@
+{
+  "topology": "reference-rpi",
+  "rpi_uri": "ip:phaser.local",
+  "sdr_uri": "ip:phaser.local:50901",
+  "source": "hb100",
+  "hb100_freq_hz": 10423310546.875,
+  "sample_rate": 30000000.0,
+  "rx_lo": 2200000000.0,
+  "rx_buffer_size": 1024,
+  "averages": 4,
+  "channel_file": "channel_cal_val.pkl",
+  "gain_file": "gain_cal_val.pkl",
+  "phase_file": "phase_cal_val.pkl",
+  "channel_cal": [
+    -0.0,
+    0.0
+  ],
+  "gain_cal": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "phase_cal": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ]
+}

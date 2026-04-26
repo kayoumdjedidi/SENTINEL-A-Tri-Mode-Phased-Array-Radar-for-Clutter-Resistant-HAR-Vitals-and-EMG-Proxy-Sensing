@@ -1,0 +1,17 @@
+{
+  "created_at": "2026-04-24T23:07:22",
+  "steer_deg": -30.0,
+  "target_range_m": 1.3525046382189263,
+  "target_score": 0.4857022762298584,
+  "rx_gain_db": 45,
+  "clip_fraction": 0.0,
+  "adc_peak": 849.0,
+  "rd_floor": 2.1217118382453917,
+  "rd_ceil": 4.332197539806366,
+  "notes": [
+    "ADC level looks usable.",
+    "Best coarse beam angle: -30.0 deg.",
+    "Initial target range: 1.35 m."
+  ],
+  "path": "calibrations\\sentinel_cal_20260424_230722.json"
+}

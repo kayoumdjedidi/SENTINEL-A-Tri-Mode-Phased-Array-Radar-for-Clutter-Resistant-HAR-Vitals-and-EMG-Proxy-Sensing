@@ -1,5 +1,10 @@
 # SENTINEL Mode A — Operational Manual
 
+> Current note: this file preserves the older operational manual and still
+> contains WSL/Pi-forwarded-IIO assumptions. For the current script inventory,
+> working Windows-native topology, and avoid-list, use
+> `mode_a_scripts.md`.
+
 **Hardware:** CN0566 Phaser + AD9361 Pluto SDR  
 **Transport:** WSL → Raspberry Pi (`phaser.local`) → Pluto (`50901` IIO context forwarding)  
 **Software stack:** `radar_dsp.py` / `radar_backends.py` / `radar_mode_a.py`

@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-04-25T22:10:05",
+  "steer_deg": 0.0,
+  "target_range_m": 4.0241187384044705,
+  "target_score": 0.21395540237426758,
+  "rx_gain_db": 45,
+  "clip_fraction": 0.0,
+  "adc_peak": 309.0,
+  "rd_floor": 1.8228082954883575,
+  "rd_ceil": 3.468702840805054,
+  "notes": [
+    "ADC level looks usable.",
+    "Best coarse beam angle: +0.0 deg (adjusted score 0.21).",
+    "Initial target range: 4.02 m."
+  ],
+  "path": "calibrations\\sentinel_cal_20260425_221005.json",
+  "hb100_freq_hz": 10423310546.875,
+  "hb100_cal_path": "hb100_freq_val.pkl"
+}

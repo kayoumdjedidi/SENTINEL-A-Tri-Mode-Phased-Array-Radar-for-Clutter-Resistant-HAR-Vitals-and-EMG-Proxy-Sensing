@@ -1,0 +1,13 @@
+{
+  "topology": "reference-rpi",
+  "rpi_uri": "ip:phaser.local",
+  "sdr_uri": "ip:phaser.local:50901",
+  "sample_rate": 30000000.0,
+  "rx_lo": 2000000000.0,
+  "sweep_start": 10000000000.0,
+  "sweep_stop": 10700000000.0,
+  "sweep_step": 10000000.0,
+  "peak_freq_hz": 10423310546.875,
+  "peak_power_db": -35.07157516479492,
+  "save_file": "hb100_freq_val.pkl"
+}

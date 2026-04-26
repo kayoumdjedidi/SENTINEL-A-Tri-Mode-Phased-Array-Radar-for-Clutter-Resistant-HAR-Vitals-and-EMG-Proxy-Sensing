@@ -15,7 +15,7 @@ signal_freq = 100e3
 sample_rate = 0.6e6
 frame_size = 8192
 ramp disabled
-RX0 only for v1
+RX0+RX1 enabled for AD9361 reliability; channels are coherently summed in v1
 Add a CW DSP module that does:
 FFT around the IF tone
 complex mix-down to baseband
@@ -28,6 +28,35 @@ displacement conversion from phase using wavelength
 respiration estimate from 0.1–0.6 Hz
 heartbeat estimate from 0.8–2.5 Hz
 confidence from in-band peak prominence / peak-to-noise ratio
+
+Heartbeat Interpretation
+Mode B does not measure the heart electrically like ECG. It measures mechanical
+micro-motion in the radar phase. A reflector displacement `d` changes the
+round-trip phase by `4*pi*d/lambda`; at 10.25 GHz, lambda is about 29 mm, so
+sub-mm chest/skin motion is visible in phase.
+
+The DSP path unwraps phase, removes slow drift, then separates bands:
+- respiration: 0.15-0.50 Hz, about 9-30 breaths/min
+- heartbeat candidate: 0.80-2.50 Hz, about 48-150 beats/min
+
+The HR number is therefore the strongest sufficiently confident periodic motion
+inside the heart-rate band. It is not a direct cardiac electrical measurement.
+It can be contaminated by respiration harmonics, body motion, cable movement,
+and multipath. A plausible HR reading should be validated against a watch,
+pulse oximeter, or ECG reference.
+
+Expected live behavior:
+- IF Spectrum: strong stable carrier near the 100 kHz IF tone
+- IF Waterfall: stable horizontal carrier line, with slow brightness/sideband changes
+- Phase Displacement: large slow respiration trace plus smaller faster HR-band trace
+- Phase PSD: distinct respiration peak and, when SNR is good, a separate HR-band peak
+
+False-HR warning:
+If the HR readout follows deliberate breathing-rate changes, jumps with small
+body shifts, or sits exactly on a breathing harmonic, treat it as motion leakage
+rather than verified heartbeat. True HR should remain close to an external pulse
+reference while respiration changes independently.
+
 Add sentinel_mode_b.py as the live entrypoint with a non-blocking worker thread and a PyQt/pyqtgraph GUI.
 GUI panels:
 IF FFT around tone

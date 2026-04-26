@@ -15,11 +15,30 @@ Proven topology (Windows, 2026-04)
   Do NOT use ip:phaser.local:50901 or WSL-forwarded paths — both cause
   ETIMEDOUT on s.rx() regardless of the acquisition mode.
 
-Default tuning (proven, recordings/win_tdd_soft_*)
-----------------------------------------------------
+Default tuning — spec-justified
+---------------------------------
   --acq tdd  --tdd-trigger soft
-  --bw 500e6  --ramp-time-us 300  --num-chirps 64  --sample-rate 4e6
-  max_vel = ±14.6 m/s   R_res = 0.30 m   v_res = 0.46 m/s
+  --bw 500e6  --ramp-time-us 300  --num-chirps 256  --sample-rate 4e6
+
+  BW = 500 MHz (spec says 200 MHz, but spec was written for WSL+continuous where
+  buffer throughput was the bottleneck).  TDD captures exactly num_chirps×spc
+  samples regardless of BW.  500 MHz = 0.30 m range resolution, which is strictly
+  better for separating torso from limbs and for AoA estimation.
+
+  Ramp = 300 µs (spec says 200 µs, but spec was written for continuous-mode PRF).
+  300 µs is the proven TDD path.  Max velocity = ±24.4 m/s, sufficient for all
+  human motion and falling.
+
+  num_chirps = 256 (matches spec).  At 64 chirps velocity resolution = 0.76 m/s,
+  too coarse to distinguish slow limb motion from zero-Doppler — a fatal flaw for
+  micro-Doppler HAR.  256 chirps → 0.19 m/s resolution, which RadMamba requires.
+  CPI = 76.8 ms, expected frame rate ~6-7 FPS with TDD soft-sync.
+
+  RX gain = 45 dB (spec says 60 dB, but spec was written before recording data).
+  At 70 dB: 3.3% of samples clip at ±4096 ADC counts, generating clipping harmonics
+  at 36m / 72m that dominate the Range-Doppler map post-MTI.  Simulation confirms
+  -20 dB from 70 dB (= 50 dB) eliminates clipping.  45 dB is the conservative safe
+  starting point.  Try 50-55 dB if near-range targets are weak.
 
 Run
 ---
@@ -93,11 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Chirp bandwidth")
     t.add_argument("--ramp-time-us", type=int, default=300, metavar="us",
                    help="Ramp time in microseconds (300 is proven for TDD soft-sync)")
-    t.add_argument("--num-chirps", type=int, default=64,
-                   help="Chirps per frame")
+    t.add_argument("--num-chirps", type=int, default=256,
+                   help="Chirps per frame. 256 gives 0.19 m/s Doppler resolution "
+                        "needed for micro-Doppler HAR (spec requirement).")
     t.add_argument("--sample-rate", type=float, default=4e6, metavar="Hz")
-    t.add_argument("--rx-gain", type=int, default=70,
-                   help="RX gain dB (-3 to 70)")
+    t.add_argument("--rx-gain", type=int, default=45,
+                   help="RX gain dB (-3 to 70). 45 dB avoids ADC clipping from TX leakage.")
     t.add_argument("--tx-gain", type=int, default=0,
                    help="TX gain dB (0 = max power)")
     t.add_argument("--output-freq", type=float, default=10.25e9, metavar="Hz")
@@ -143,8 +163,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "in the current Pluto firmware.")
     tdd.add_argument("--frame-guard-ms", type=float, default=0.2,
                      help="Guard interval added to ramp to form PRI")
-    tdd.add_argument("--tdd-arm-delay-s", type=float, default=0.5,
-                     help="Seconds to wait after starting rx() before issuing sync")
+    tdd.add_argument("--tdd-arm-delay-s", type=float, default=0.05,
+                     help="Seconds to wait after starting rx() before issuing sync. "
+                          "0.05 s is enough over ip:192.168.2.1 (local network).")
     tdd.add_argument("--tdd-rx-timeout-ms", type=int, default=30000)
 
     return p
@@ -208,7 +229,10 @@ class SentinelWindow(QMainWindow):
 
         self._saving         = False
         self._raw_bursts:    list[np.ndarray] = []
+        self._raw_ch0:       list[np.ndarray] = []
+        self._raw_ch1:       list[np.ndarray] = []
         self._spectrograms:  list[np.ndarray] = []
+        self._valid_chirps:  list[int]        = []
         self._timestamps:    list[float]      = []
 
         self.setWindowTitle(
@@ -368,13 +392,17 @@ class SentinelWindow(QMainWindow):
         h   = self._args.history_len
 
         r_display = float(self._maxr_sl.value())
+        # Use plain text labels — do NOT pass units= to pyqtgraph.
+        # pyqtgraph applies SI prefix scaling to the unit string, which
+        # converts "m" → "km" and "m/s" → "km/s" for values in typical
+        # radar ranges, collapsing the near-range display to sub-pixel.
         label_kw  = {"color": "#ccc", "font-size": "10pt"}
 
         # ── Beat-frequency FFT panel (top-left) ───────────────────────
         p_rp = glw.addPlot(row=0, col=0,
                            title="Beat-Freq FFT  (mean chirp, dBFS)")
-        p_rp.setLabel("bottom", "Range",  units="m",   **label_kw)
-        p_rp.setLabel("left",   "dBFS",               **label_kw)
+        p_rp.setLabel("bottom", "Range [m]",  **label_kw)
+        p_rp.setLabel("left",   "dBFS",       **label_kw)
         p_rp.setXRange(0.0, r_display, padding=0)
         p_rp.setYRange(-100, 0, padding=0)
         p_rp.enableAutoRange("xy", False)
@@ -397,8 +425,8 @@ class SentinelWindow(QMainWindow):
 
         # ── Range-Doppler heatmap (top-right) ─────────────────────────
         p_rd = glw.addPlot(row=0, col=1, title="Range-Doppler")
-        p_rd.setLabel("left",   "Range",    units="m",   **label_kw)
-        p_rd.setLabel("bottom", "Velocity", units="m/s", **label_kw)
+        p_rd.setLabel("left",   "Range [m]",     **label_kw)
+        p_rd.setLabel("bottom", "Velocity [m/s]", **label_kw)
         p_rd.setYRange(0.0, r_display, padding=0)
         p_rd.setXRange(float(v.min()), float(v.max()), padding=0)
         p_rd.enableAutoRange("xy", False)
@@ -422,8 +450,8 @@ class SentinelWindow(QMainWindow):
         # ── Micro-Doppler history (bottom, full width) ─────────────────
         p_md = glw.addPlot(row=1, col=0, colspan=2,
                            title="Micro-Doppler History")
-        p_md.setLabel("left",   "Velocity", units="m/s", **label_kw)
-        p_md.setLabel("bottom", "Frame index",           **label_kw)
+        p_md.setLabel("left",   "Velocity [m/s]", **label_kw)
+        p_md.setLabel("bottom", "Frame index",     **label_kw)
         p_md.setXRange(0, h, padding=0)
         p_md.setYRange(float(v.min()), float(v.max()), padding=0)
         p_md.enableAutoRange("xy", False)
@@ -561,9 +589,18 @@ class SentinelWindow(QMainWindow):
 
         # 9. Recording
         if self._saving:
+            spc = cfg.n_frame
+            nc  = cfg.num_chirps
             self._raw_bursts.append(cap.chirp_matrix.copy())
             self._spectrograms.append(md_slice.copy())
+            self._valid_chirps.append(int(cap.chirp_matrix.shape[0]))
             self._timestamps.append(t0)
+            if cap.ch0 is not None:
+                self._raw_ch0.append(
+                    np.asarray(cap.ch0, dtype=np.complex64).reshape(nc, spc))
+            if cap.ch1 is not None:
+                self._raw_ch1.append(
+                    np.asarray(cap.ch1, dtype=np.complex64).reshape(nc, spc))
 
         # 10. Status
         dt = (time.monotonic() - t0) * 1000
@@ -616,7 +653,10 @@ class SentinelWindow(QMainWindow):
         self._saving = (state == Qt.Checked)
         if self._saving:
             self._raw_bursts.clear()
+            self._raw_ch0.clear()
+            self._raw_ch1.clear()
             self._spectrograms.clear()
+            self._valid_chirps.clear()
             self._timestamps.clear()
             self._save_lbl.setText("● Recording…")
             self._save_lbl.setStyleSheet("font-size: 10px; color: #ff8844;")
@@ -634,6 +674,11 @@ class SentinelWindow(QMainWindow):
                 cfg=self._cfg,
                 raw_bursts=np.stack(self._raw_bursts, axis=0),
                 spectrograms=np.stack(self._spectrograms, axis=0),
+                raw_ch0=(np.stack(self._raw_ch0, axis=0)
+                         if self._raw_ch0 else None),
+                raw_ch1=(np.stack(self._raw_ch1, axis=0)
+                         if self._raw_ch1 else None),
+                valid_chirps=np.array(self._valid_chirps, dtype=np.int32),
                 metadata={
                     "acq":         self._args.acq,
                     "tdd_trigger": self._args.tdd_trigger,

@@ -27,11 +27,65 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from radar_dsp import RadarConfig, segment_buffer
+
+
+_PHASER_CAL_MESSAGES_SEEN: set[str] = set()
+
+
+def _print_phaser_cal_once(message: str) -> None:
+    if message not in _PHASER_CAL_MESSAGES_SEEN:
+        print(message)
+        _PHASER_CAL_MESSAGES_SEEN.add(message)
+
+
+def _resolve_cal_path(path: str | Path) -> Path:
+    """Resolve cal files from cwd first, then from this script's directory."""
+    candidate = Path(path)
+    if candidate.is_absolute() or candidate.exists():
+        return candidate
+    local_candidate = Path(__file__).resolve().parent / candidate
+    if local_candidate.exists():
+        return local_candidate
+    return candidate
+
+
+def load_phaser_gain_phase_cal(
+    phaser: Any,
+    *,
+    gain_file: str | Path = "gain_cal_val.pkl",
+    phase_file: str | Path = "phase_cal_val.pkl",
+) -> None:
+    """Load CN0566 gain/phase cal with explicit, non-ambiguous messages.
+
+    pyadi prints only "file not found" when these optional files are absent,
+    which is easy to confuse with the HB100 calibration cache.  These are
+    separate array calibration files.
+    """
+    gain_path = _resolve_cal_path(gain_file)
+    phase_path = _resolve_cal_path(phase_file)
+    if gain_path.exists():
+        phaser.load_gain_cal(str(gain_path))
+        _print_phaser_cal_once(f"[phaser-cal] loaded gain calibration: {gain_path}")
+    else:
+        phaser.gcal = [1.0] * 8
+        _print_phaser_cal_once(
+            f"[phaser-cal] {gain_path} not found; using default per-element gain calibration."
+        )
+
+    if phase_path.exists():
+        phaser.load_phase_cal(str(phase_path))
+        _print_phaser_cal_once(f"[phaser-cal] loaded phase calibration: {phase_path}")
+    else:
+        phaser.pcal = [0.0] * 8
+        _print_phaser_cal_once(
+            f"[phaser-cal] {phase_path} not found; using default per-element phase calibration."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +230,7 @@ class _BaseBackend:
         # Phaser array
         self._phaser.configure(device_mode="rx")
         self._phaser.element_spacing = self.hw.element_spacing
-        self._phaser.load_gain_cal()
-        self._phaser.load_phase_cal()
+        load_phaser_gain_phase_cal(self._phaser)
         for ch in range(8):
             self._phaser.set_chan_phase(ch, 0)
         for ch, g in enumerate(self.hw.gain_taper):
